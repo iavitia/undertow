@@ -1,0 +1,606 @@
+
+How To Connect Claude to Trading View (Insanely Cool)
+
+Claude meets TradingView live
+Yesterday on X, somebody figured out how
+to connect Claude, the AI, to Trading
+View. It engages with Trading View Live.
+It creates indicators out of thin air.
+It does all kinds of things directly
+into Trading View live, and all of it's
+done simply from within your terminal.
+It currently has 3/4 of a million
+traders going crazy about it online.
+Now, there have been tools before that
+claim to have AI integrated into a
+chart, but most of the time, and I've
+used these, by the way, you just end up
+screenshotting the chart. You throw it
+into the AI, and then by the time you've
+moved the screenshot over to the AI, the
+candles have moved, and now it's
+potentially different, and it's always
+this delayed thing that's going on. So,
+you end up getting a reading on the
+chart from the AI that's irrelevant now.
+But, this is completely different. So,
+because that's what I do on this
+channel, I went in and I tested it out.
+I've been using it and I've actually
+made it better. And yet, you're going to
+see just how incredible this is. But
+there were some elements where I
+thought, you know, there could be
+Why screenshots fail for trading
+improvement here. And I mean, all credit
+to Trades Don't Lie who created this
+thing. But there are some elements that
+I thought really needed to be improved.
+And I've gone ahead and done so. We're
+at a point right now where AI and
+trading and finance and investing and
+blockchain is all coming together and
+it's creating this potent mix. And if
+you're not paying attention and you're
+not just going to AI and saying, "Hey,
+what's Bitcoin going to do?" You're
+actually wiring up these projects and
+actually creating your strategy, your
+brain into the code, you're going to be
+left behind because the people that are
+figuring that out right now have an
+obscene, unfair advantage. And that's
+what this channel is all about. I want
+to give you an unfair advantage versus
+everyone else in the market. And this is
+one of those mustwatch videos. So, by
+the end of this video, I'm going to give
+you three things. Number one, you're
+going to know exactly how it works.
+Number two, I'm going to teach you how
+to set it up all for yourself in just a
+couple of minutes. And three, I've made
+improvements on what the original
+creator did. I saw a lot of people in
+the comments were struggling with
+elements of it, and I've gone ahead and
+fixed those. And I'm going to give you
+my version completely for free. I don't
+even want your email. I just want you to
+make a butt ton of money. And after you
+subscribe, let's get into it. So, what
+is this actually? Well, the tool that
+was created is called Trading View MCP.
+You don't need to know what MCP actually
+stands for. All you need to know is that
+it will allow Claude to interact
+directly almost like on a codetocode
+basis with Trading View. I think most
+people assume that this is just another
+AI chart reading tool. You know, you
+show it the chart and you get it to tell
+you what to do. But if that's what
+you're expecting from this tool, you're
+going to entirely misuse it and you're
+going to get the wrong outputs and it's
+just not going to be a good experience.
+But let me tell you what's different.
+When you screenshot a chart and you put
+it into AI, the AI is essentially just
+How the MCP reads chart data
+guessing because it's looking at a
+picture. It's trying to interpret an
+image. An image is just a series of
+pixels, right? And you can see
+immediately why that wouldn't work.
+Because if you provided an image that
+was pixelated or just a very low
+quality, you know, those little
+elements, the difference in pixels can
+actually mean something for whether you
+know you should enter a trade or sell a
+trade, right? And I know we're talking
+about fine details, but trading is kind
+of the fine details, isn't it? Not to
+mention, when you've delivered the
+screenshot to your AI, it's out of time.
+Like, it's out of date already. It's
+it's irrelevant because the charts
+moved. Well, in this system, Claude
+isn't looking at an image. It's actually
+looking at the code and the values on
+the screen. What that means is it knows
+the exact positioning on a code level of
+all the candles on the screen, and it's
+watching that live. So if you're on the
+one minute chart, even if you're on the
+1 second chart, Claude is able to read
+those 1 second changes every single
+second. It knows the precise pricing of
+every candle from the top to the bottom
+with the wicks and everything and live
+all the time. It's a very different
+thing than image recognition. And the
+crazy part is is that you just talk to
+the chart within your terminal. So
+you're talking to Claude and Claude is
+interpreting what you're saying from
+your natural language and just marrying
+that up with the code in the back end
+and that changes absolutely everything
+about how you use this thing. So let's
+have a look at how it works under the
+hood. Many of you may or may not know
+this, but if you go onto a browser
+anywhere and just rightclick, you'll see
+a button at the bottom called inspect.
+Under the hood — inspect element
+When you click inspect, it basically
+shows you all the code that's on a page.
+And what's interesting is that as the
+page updates or new information loads on
+the screen, it will also appear in here.
+The code actually changes. It's dynamic.
+And so this project that connects Claude
+into Trading View has essentially Claude
+reading live all of the data that's
+happening on the code on the screen at
+that time. So it's actually reading the
+live data that's on the screen right now
+without using images. So let's get into
+the build, shall we? This is going to be
+super simple because I've filmed this
+tutorial already. I tried to do the
+manual version. If you go down on the
+GitHub, you can see there is a manual
+version. You know, copy and paste this,
+copy and paste this, do all these
+details. It's just a bit of a headache.
+One-shot setup prompt walkthrough
+I decided to skip that whole process and
+deliver you a oneshot setup prompt. All
+you have to do is come over here, right
+where it says oneshot setup, copy, paste
+it into your claude code, and there we
+go. That's all you have to do. And I'm
+going to run through just the process of
+using that oneshot setup prompt right
+now. So, as I'm running this, it's just
+going to ask me a few things just to
+confirm or deny a few things. At the
+bottom, you can see, do you want me to
+create mcp.json? It says yes, yes, and
+allow claw to edit on its own for this
+session or no. I always just choose the
+one that allows it to be more automated.
+So, I'm going to choose number two here.
+You just click the two button on your
+keyboard and it will carry on. We may
+get a few more of those as the process
+continues, but ultimately it couldn't be
+easier. While we wait for that, I
+thought I might as well show you my 10X
+dashboard. If you don't know already,
+I'm trying to turn £50,000 into £500,000
+in just a single year. So far, we're
+doing wonderfully. We are up four almost
+£4,000 over the purchases that we have
+made so far. I haven't entered in all
+the positions yet, but you can see every
+position I've entered, the P&L on every
+single one, and the exact moments when
+I've purchased my crypto. As you can
+see, my strategy is chef's kiss. Every
+single dip that you see in the market
+right here, I am buying. And it's all
+completely automated. The whole system
+10X dashboard portfolio update
+is automated. It's an incredible thing.
+If you're interested in learning how to
+set that up for yourself or be alerted
+exactly when I'm alerted, so you can buy
+whatever cryptos that you're looking to
+buy. There's a link in the description
+for you to check that out. You can also
+watch my video on my strategy right on
+the top right hand side of this screen.
+But let's go back to our terminal and
+have a look. It says done. The setup is
+complete. Trading View desktop just
+needs to be running with CDP enabled.
+So, it's telling me right now in order
+to use this, I have to either launch the
+Trading View desktop or just open
+Trading View and then run this specific
+command right here that I'm highlighting
+to just to check the connection. So,
+I've got Trading View open and I'm just
+going to run this again just to see if
+it all works. This is basically just
+seeing whether the MCP is in fact
+connected properly and whether we're
+ready to move on to the next stage. In
+order to make this work really well, you
+just have to download Trading View
+Connecting TradingView Desktop
+Desktop. You can come over to
+tradingview.com/destop
+and you can select whichever one works
+for you. Obviously, for me, it's the
+Mac. Just go ahead and do the normal
+installation process. So, we've pulled
+up our Trading View desktop. It has said
+to launch it, all we have to do is paste
+this into our terminal. And so, that's
+what we'll do. We'll just take that and
+paste it in there. It now just needs us
+to launch Trading View with the exact
+location of Trading View. So, all you're
+going to do is go over to your Finder
+and find Trading View in your
+applications list. This is going to be
+slightly weird to do, but click command
+and C. So, you're copying that
+application and you're pasting it into
+Claude Code. Claude Code is then going
+to give you an updated command that you
+need to copy and paste into Claude Code
+to set this up properly. We just have to
+give it 5 to 10 seconds to start and
+then we're going to run again TV health
+check to see if it is in fact running.
+Okay, it's done some reloading of
+Windows and everything and Trading View
+is now back and it says the CDP is live.
+First voice command to Claude
+Now, this is where it gets really
+interesting and I want you to pay
+attention here. At the bottom, it says
+now fill in the rules.json with your
+watch list and trading and trading rules
+and you're good to go. Now, typically
+what people will do is they'll go into
+that file and actually make the changes
+in the file. I don't like to do that
+because I'm using Claude, right? I want
+to talk to it. We know that right now
+it's looking at my screen. Now, a few of
+these things are going to start looking
+a little bit like magic, but I want to
+show you the capabilities to start with
+and then we'll move on to some more
+advanced things. So, let's say we're
+looking at the Apple chart right here.
+Let's say we want to look at the Bitcoin
+chart. Well, all I'm going to do is talk
+to my Whisper Flow. You can download it
+using the link in the description. I'm
+going to tell it what I want to see on
+the screen. Okay, so let's go. Can you
+show me the Bitcoin chart on the 1 week
+time frame, please? I've just clicked
+enter on that and hopefully we should
+see our trading view start to change.
+There it is. It's done already. It's
+literally It's literally magic. It's
+It's magic. It's absolutely magic. Let's
+say I want to remove the volume
+indicator from the bottom. Can you
+please remove the volume indicator from
+the bottom of the screen? It's when you
+start using this you it is incredible.
+And we haven't even scratched the
+Building a strategy from scratch
+surface here by the way. Like one of the
+things that we can do here is instruct
+it on a strategy. We can get it to place
+different indicators just like you can
+see there. It's just removed the the
+volume indicator from the bottom. It's
+absolutely incredible. So now what we
+want to do is we want to make sure that
+the our our theories for investing our
+trading strategies are properly
+communicated with the Claude because
+Claude is going to go into the file
+structure that we've created and edit
+the strategy the way you like to trade
+and it's going to implement those onto
+the chart. I don't have necessarily a
+trading strategy right now, but I'm
+going to ask it just very naturally here
+to kind of copy someone else's trading
+strategy and let's see it all get
+implemented on the chart. Hey, so I'm
+not much of a a day trader. I really
+don't know much about day trading, but
+I'm sure there's a few people who are
+very public about their day trading and
+they're really really good. They've got
+strong performance and everything. I
+want you to research what they've done
+with their trading strategy, the
+indicators they use, the moving averages
+they use, whatever it is, and then can
+you please install those onto my Bitcoin
+chart here? You can update my rules.json
+file with all of that information. And
+then we can see that kind of playing out
+on my screen. So, as you can see, I'm
+talking very naturally to this thing,
+and it's just doing it all. It will now
+go away and do exactly what I've said.
+So, we'll come back once that's all done
+its thinking and we start seeing some
+stuff on the screen. So, as we let that
+work, it's finding now the the best
+traders in all of Bitcoin day trading
+and it's just going to implement their
+strategy. Now, that strategy is just
+going to be data in a file, but we need
+that data in a file to be converted to
+something that we actually see on the
+screen. And so what we want to end up
+doing is actually creating a pine script
+uh strategy that can be implemented on
+here and give us directions on what to
+be trading and when to be trading. So
+you might talk to Claude and say
+Pine Script auto-generated live
+something along the lines of this. Once
+you've actually created the whole
+strategy based on the the trader that
+you're researching, can you actually
+turn that into a pine script, please?
+And then in implement that pine script
+onto the chart. And so all I'm doing now
+is queuing up sequentially a whole load
+of things that I want to tell Claude and
+it will get to it once it's finished the
+research. So right now it said great
+research. I'll apply the van deop setup
+which is the most replicable best for
+Bitcoin swing trading on the weekly
+combined with the tone vase MACD the EMA
+the 21 the 50 and the 200 the RSI at 14
+and the MACD. I'll update your
+rules.json file. Let me add them now.
+So, it's actually created the strategy.
+It's now going through and adding the
+indicators onto the screen. And then
+once it has completed that, it will see
+my next prompt, which is about turning
+it into a pine script. A pine script
+will allow us to then back test the the
+strategy to see how it would have
+performed in the past. It's going to
+create now a a pine script for this
+Bitcoin weekly chart. And just like
+that, you could see the whole thing
+changed there, right? It just completely
+and entirely wrote that whole Pine
+script. And what's really cool about the
+Pine script is that right here, you can
+see there's one of two problems. There's
+actually two issues with the code here.
+But because Claude Code is watching
+what's on the screen from a code level,
+it can see that there is one of two
+problems and it will go in there and fix
+those issues and it will keep doing it
+and keep fixing them until it's all
+resolved. I'm just imagining someone
+who's never been in the terminal before,
+never used clawed code like this,
+looking at the screen right now. you
+feel like you're in the matrix. This is
+like everything is is moving. So, as
+Claude fixing its own code errors
+we're waiting for that Pine script to
+install in its entirety, I'm going to
+ceue up another prompt here. In this
+prompt, I want to give it my entire
+watch list of assets that I want to keep
+on top of. Right? In the previous
+version that I've kind of replicated
+here, you had to every day or every
+morning or whenever you got to your
+computer, you'd have to instruct the AI
+to look at a specific chart one at a
+time. So it would be like, okay, open up
+my Ethereum chart, analyze the Ethereum
+chart, now the Bitcoin one, now the
+Salana one, now the XRP one. And it's
+just a bit of a headache to to do it
+over and over again. So what I ended up
+creating was kind of a a daily routine
+that essentially every morning it will
+come in, it will look at your watch
+list, and then produce you a report of
+your watch list right at that moment.
+Right? Saving saving you having to kind
+of one at a time go through it. It's one
+of the small improvements that I've
+made. So, it says that everything is
+live. The Bitcoin strategy, the
+Vanderpop, and the tone vase is live on
+Bitcoin USD weekly. It tells us exactly
+Adding a full watchlist at once
+what is entailed in this. And we're
+going to have a look to see. Holy moly,
+it did it. It actually did it. It's
+installed the whole thing. So it tells
+us right now that the buy zone labels
+when the price pulls back into the zone
+with RSI 35 to 58 and the MACD is still
+bullish. Uh it will just inform us that
+there's a buying opportunity. You can
+see as we zoom out there's a buying
+opportunity right here. There's a buying
+zone right there and it did go up. This
+isn't obviously I just made this
+strategy up with the top of my head like
+this is by no means like sound or
+anything but the process is here and you
+can install that in your way. But as I
+said, I want to tell it what my what the
+assets are on my watch list because this
+is going to help us later. So, let's
+have a go. So, I've got a few assets on
+my watch list that I want you to apply
+this to. So, Bitcoin, Ethereum, Salana,
+XRP, Chain Link, and Pepe. Let's just
+let's just see what it says. Um, I'm
+going to remove that last bit cuz I just
+stopped I didn't stop transcribing. And
+let's do that. So, it should add these
+assets to my watch list. And you can see
+it's just cycling through all of the
+assets and applying the indicator that
+we've created here, the Pine script on
+all of the assets that we've talked
+about. Right now, it just applied it
+onto Salana. And next, we should see it
+on XRP. There you go. And it will just
+run through this entire thing doing it
+for every asset on our watch list. So,
+of course, if you wanted to edit any of
+this, you absolutely can, right? You can
+say, can you add an EMA line at the, you
+know, the 20we EMA? And if the price
+comes down and double taps that line for
+example, then alert me and it will build
+the pine script according to what you've
+said. But separately, you can already
+see that from the watch list that I
+created, it's given me a signal on every
+single asset on the weekly chart on my
+Signal results across all assets
+watch list based on this strategy. It's
+told me that Bitcoin's bearish,
+Ethereum's bearish, Salana is bearish,
+XRP is neutral, link is bearish, and
+Pepe is neutral as well. It gives me a
+really good idea as to what I should be
+doing. Now, that brings me to what I
+have built and added on top in a more
+concrete way. Right? There's a lot of
+issues with this that I didn't feel sat
+right with me. So, I'm going to tell you
+about the changes that I've made and
+show you how to use them in your
+terminal. As I mentioned, it was very
+frustrating asking the AI to show me one
+chart and then tell it then get it to
+show me another chart and another chart.
+I felt like that was too much effort. I
+I'm lazy now. Right now, the AI AI does
+everything for me. And so, I set up
+something called the morning brief. And
+in order to get your morning brief, all
+you have to do is type in morning_brief
+into your terminal. And what it will do
+is it will go out and it will look at
+all the items on your watch list and
+deliver you a morning brief. Right? So
+you it doesn't have to be the morning
+when you run it, but at least you only
+Morning brief — one command daily
+have to type this one time instead of
+every asset individually. So imagine you
+come into your office, you open up your
+computer, and you run a morning brief.
+That morning brief will just show you
+all the assets and the positions of all
+your assets anytime you want. If you
+want to make this extra on steroids, you
+can even set it up to send you a brief
+every 10 minutes if you want, every
+minute if you want. It might get a
+little bit annoying, but you can set it
+up in that way. I like a morning brief
+just to see the status of all the assets
+and if it's a good moment right then,
+maybe I'll add some to a position or I
+take some away from a position. I also
+added this rules file that we've already
+kind of started talking to. basically
+allows you to talk with Claude to add
+the rules that you want implemented.
+Like, you know, something is bullish if
+these things take place, something is
+bearish if these things take place,
+something's neutral if these things take
+place, you know, what rules do we have
+for entering a long, entering a short,
+what about exiting, what about the risk
+that we're assuming, what about the time
+frames that we use? You can input all of
+that into here just by simply talking to
+Claude. And that means you get an extra
+level of like intricacy here, right? You
+can see that the morning brief has been
+delivered here. Just tells us all the
+information. There's no long setups on
+Custom rules via conversation
+Bitcoin. It's the worst looking chart of
+all the majors on Ethereum. It's the
+closest to a potential reversal for XRP,
+but it's still not a buy. This is just
+really good stuff. Like, I don't know
+how else to say it. This is just good
+good stuff. I'm sure you could attach to
+this the idea of like taking someone's
+strategy in full. Let's say you
+downloaded every transcript from
+Coinskid for example, one a prominent TA
+analyst. You could scrape all the
+transcripts of his videos and basically
+say what is his strategy? What
+indicators does he use? Can you
+determine whether it's things are a buy
+or a sell? You know, based on what he
+has talked about in his videos and apply
+that as a pine script into my chart.
+What happens in the end is you end up
+looking at a chart the same way that
+Scraping a trader's full strategy
+CoinsKid does or blockchain backer for
+example. He's incredible. What if you
+scraped all the transcripts of all of
+his videos and determined, you know,
+what charts is he looking at? You know,
+how is he looking at things? What's his
+decision-making process and how can I
+put that into a Pine script? That's all
+accessible to you. Because of this,
+it'll just update the rules.json file
+with all the rules and then implement it
+on your thing. You do a morning brief
+every day and you're told what to do
+based on people that know what they're
+talking about or if you're the one who
+knows what you're talking about. It's
+it's based on your strategy. No emotions
+are involved. It's like you've done the
+thinking of the strategy and there it
+is. Here's the decisions to make. How
+much easier is that? How much more
+bandwidth do you open up? There was also
+a little launch bug that was a problem
+Get the free one-shot prompt
+with the Trading View thing. That's also
+been entirely fixed. And so everything
+that you've seen built right here is
+accessible for you right now for free. I
+don't want your email. I don't want you
+to pay me. I just want you to make a
+whole load of money. And I think this is
+one of those tools that unlocks
+something that didn't exist before. If
+you want to use this right now, you can
+click the link in the first line of the
+description, copy and paste that oneshot
+prompt over, and bish bash bosch, you
+know what to do. You're going to make a
+ton of money. Thanks for watching.

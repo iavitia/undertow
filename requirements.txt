@@ -1,0 +1,11 @@
+requests
+pandas
+numpy
+fastapi
+uvicorn
+watchfiles
+python-dotenv
+eth_account
+# NOT on PyPI despite its own README claiming `pip install derive-py` --
+# confirmed via PyPI's JSON API (404). Install from GitHub directly.
+derive_py @ git+https://github.com/derivexyz/derive-py.git

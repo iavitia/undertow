@@ -1,0 +1,884 @@
+is there any benefits to staking a cryp coin vs having the money in a high yield savings, bonds, usdg on robinhood, or another income etf?  
+
+Yes. The main benefit of staking a crypto coin over a HYSA, Treasuries/bonds, USDG lending, or an income ETF is that staking gives you both yield and exposure to the coin's price appreciation.
+
+But that also means you're taking considerably more risk to earn that yield.
+
+For example, imagine you have $10,000:
+
+Investment	Example yield	What happens to your $10k?	Main risk
+HYSA	~4%	Stays ~$10k + interest	Very low
+Treasury	~4–5%	Predictable if held to maturity	Very low
+USDG lending	~7% currently	~$1 stablecoin ≈ $1 target	Smart contract/stablecoin/liquidity risk
+Income ETF	~5–12%+	Value fluctuates	Stock/strategy risk
+SOL staking	~5–7%*	SOL price can move dramatically	Crypto volatility
+Higher-yield crypto staking	10–20%+	Coin may crash despite yield	Very high
+
+*Staking rates vary constantly.
+
+Where staking gets interesting
+
+Suppose you put $10,000 into SOL and receive 6% staking rewards.
+
+If SOL's price doesn't move:
+
+$10,000 → ~$10,600
+
+That's not particularly compelling compared with something like Robinhood's current USDG onchain lending, which advertises an estimated 7% APY.
+
+But suppose SOL appreciates 40% during that year.
+
+Roughly:
+
+$10,000 × 1.40 × 1.06 ≈ $14,840
+
+Now staking looks fantastic.
+
+The reverse is equally important. If SOL falls 40%:
+
+$10,000 × 0.60 × 1.06 ≈ $6,360
+
+You earned 6% staking yield while losing roughly 36% of your money.
+
+So I wouldn't really think of staking as an alternative to a savings account. It's closer to:
+
+"I already want to own this crypto long-term, so I might as well earn additional coins while holding it."
+
+That's the strongest argument for staking.
+
+Comparing the choices you mentioned
+
+HYSA: Best for emergency funds or money you absolutely don't want to lose. Current top HYSAs are around 4–4.5%, with FDIC/NCUA protection when eligibility requirements are met.
+
+Treasuries/bonds: Probably the most attractive comparison if your goal is simply safe yield. You can lock in a yield rather than having your HYSA rate change. Treasury yields have actually been rising recently.
+
+USDG on Robinhood: This one is particularly interesting right now. Robinhood is advertising an estimated 7% APY, but there's an important distinction: this isn't a 7% bank account. You're lending USDG onchain through Morpho from a self-custody wallet. It's not FDIC or SIPC protected, withdrawals depend on vault liquidity, and you have smart-contract/onchain risk. Robinhood says insurance may cover certain cyber or smart-contract exploits, but that isn't equivalent to FDIC insurance.
+
+Robinhood Earn / USDG lending details
+
+Income ETF: This occupies a different category. Depending on what you're talking about—JEPI/JEPQ, covered-call ETFs, dividend ETFs, CLO ETFs, etc.—you can get income plus some capital appreciation, but distributions aren't free money. Some strategies sacrifice upside to generate the income.
+
+Crypto staking: Highest potential upside of these because you're getting the staking reward plus the underlying crypto appreciation. But you're also taking substantially more downside risk.
+
+There's another staking advantage that's easy to overlook: you're accumulating more units rather than dollars. If you believe SOL, ETH, or another PoS coin will be worth substantially more five years from now, getting paid 4–7% more coins every year can compound nicely.
+
+For example, 100 SOL staked at an average 6% for five years becomes approximately:
+
+134 SOL
+
+If SOL were eventually worth $500, that's ~$67,000 instead of $50,000 from simply holding 100 SOL.
+
+But that thesis depends overwhelmingly on SOL eventually being worth $500. The staking yield itself isn't doing most of the work.
+
+One more downside: taxes
+
+For a U.S. investor, staking rewards are generally taxable income when you gain control of them, based on their dollar value at that time. The IRS reaffirmed its treatment of staking rewards, and a 2026 Tax Court decision also held staking rewards to be gross income.
+
+Then if the rewarded crypto subsequently appreciates and you sell it, you can also have a capital gain.
+
+So staking can create more tax/accounting complexity than simply holding an appreciating asset.
+
+How I'd think about it
+
+The question I'd use isn't:
+
+"SOL staking gives me 6% and my HYSA gives me 4%, so shouldn't I stake?"
+
+It's:
+
+"Would I buy SOL even if staking paid 0%?"
+
+If the answer is yes, staking it usually makes a lot of sense rather than letting the SOL sit idle.
+
+If the answer is no, buying SOL solely because staking pays 6% doesn't make much sense when you can currently get roughly 4% from insured savings, attractive Treasury yields, or ~7% from USDG lending without taking SOL's price risk. The extra 2% staking yield is tiny compared with the possibility of SOL moving ±30–50%.
+
+If you tell me roughly how much you're looking to invest and whether this is money you're trying to grow for 1, 5, or 10+ years, I can compare something like staking SOL/ETH vs USDG vs Treasuries vs JEPQ/JEPI vs a HYSA using actual dollar projections and risk.
+
+Yeah, your PC is good enough to make this worth experimenting with—especially because you already own the hardware, so we don't need mining profits to repay a new rig.
+
+Your Ryzen 7 5800XT benchmarks around roughly 8–10 kH/s on Monero's RandomX algorithm when configured properly. With Monero's recent network conditions around 5.8 GH/s, ~0.6 XMR block rewards, and XMR around $405, that works out very roughly to $0.24–$0.30/day gross from the CPU at today's conditions.
+
+The interesting part is your electricity rate. If we can get the CPU mining efficiently around 100W of additional wall power, here's approximately what it costs to run 24/7:
+
+Electricity rate	Daily power cost	30-day cost
+10.97¢ winter	$0.26	$7.90
+12.04¢ summer	$0.29	$8.67
+13.98¢ peak	$0.34	$10.07
+
+So at today's XMR economics, CPU mining is approximately break-even. During winter it could be slightly profitable with good tuning; during peak summer it could be slightly negative.
+
+That's actually better than I expected.
+
+Your RTX 3060 Ti has more earning power, but it also consumes more power. Current profitability estimates put a standard 3060 Ti around $0.60–$0.66/day before electricity, with efficient algorithms sometimes running around 90–150W.
+
+For example, at 148W:
+
+Season	Electricity/day	Gross ~$0.65/day	Approx net
+Winter	$0.39	$0.65	+$0.26/day
+Summer	$0.43	$0.65	+$0.22/day
+Peak	$0.50	$0.65	+$0.15/day
+
+That would be roughly $4.50–$7.80/month net.
+
+Not exciting financially, but remember what we're building:
+
+PC → electricity → mined crypto → convert → stake → compound
+
+That's where it becomes fun.
+
+I think we should build this differently than a normal mining rig
+
+I wouldn't just turn everything to 100% and leave it there.
+
+For Arizona, I'd design the system around efficiency per watt.
+
+Something like:
+
+Winter
+CPU + GPU mining
+↓
+maximize efficient output
+
+Shoulder summer
+CPU/GPU only if profitable
+↓
+lower power limits
+
+Peak summer
+possibly GPU-only, CPU-only, nighttime-only, or completely off
+↓
+avoid adding heat during expensive AC hours
+
+That's particularly important in your house because the computer's power draw isn't the whole cost.
+
+Every watt the computer consumes eventually becomes roughly a watt of heat inside the house.
+
+So if we run a 280W mining PC during July:
+
+280W computer
++
+AC has to remove ~280W of additional heat
+
+Your actual household-energy penalty is therefore somewhat higher than just the mining PC's electricity consumption.
+
+And when you're already doing 70–115 kWh/day, that's worth paying attention to.
+
+A 280W computer running 24 hours adds:
+
+6.72 kWh/day
+
+Against your current usage:
+
+70 kWh → +9.6%
+115 kWh → +5.8%
+
+At 13.98¢/kWh that's approximately:
+
+$0.94/day
+or
+$28.18/month
+
+before considering additional AC load.
+
+That's why I wouldn't run the whole system flat-out.
+
+The 3060 Ti actually gives us some interesting options
+
+Modern GPU mining isn't really:
+
+Pick one coin and mine it forever.
+
+We can essentially have the computer ask:
+
+What's currently the most profitable thing my 3060 Ti can mine?
+
+Today, the profitability ranking for a 3060 Ti includes several much smaller coins, and the winner changes over time. Current estimates are around $0.60–$0.66/day gross overall.
+
+So the system could be:
+
+3060 Ti
+→ mine most profitable GPU coin
+
+5800XT
+→ mine Monero
+
+↓
+
+convert rewards periodically
+
+↓
+
+SOL
+
+↓
+
+stake SOL
+
+↓
+
+SOL rewards automatically compound
+
+That means we don't actually care whether we believe in the coin being mined.
+
+It's effectively just the crop we're growing.
+
+SOL is the thing we're accumulating.
+
+And we can make it smarter
+
+This is where I think the project gets genuinely interesting.
+
+Instead of:
+
+Mining ON / Mining OFF
+
+we build a profitability controller.
+
+It knows:
+
+current mining revenue
+your current electricity rate
+CPU power consumption
+GPU power consumption
+current XMR price
+current GPU-mining profitability
+temperature
+time of day
+estimated net profit
+
+Then it can make decisions.
+
+For example:
+
+GPU revenue: $0.66/day
+GPU electricity: $0.43/day
+Expected profit: $0.23/day
+Mining enabled
+
+But:
+
+GPU revenue falls to $0.42/day
+Peak electricity cost: $0.50/day
+Expected profit: -$0.08/day
+Mining disabled
+
+That's much more interesting than blindly running a miner.
+
+We could even introduce a minimum-profit rule
+
+For example:
+
+Don't mine unless expected return exceeds electricity by 20%.
+
+Because there's no point wearing out your hardware and heating your house to make:
+
+$0.03/day.
+
+Maybe:
+
+Revenue ≥ 1.25 × electricity cost → mine
+Revenue < 1.25 × electricity cost → stop
+
+Now we've built an actual little automated production system.
+
+The first version I'd build with your hardware
+
+I'd call this Crypto Hydroponics v1:
+
+Ryzen 7 5800XT
+→ XMR mining
+→ ~8–10 kH/s
+
+RTX 3060 Ti
+→ profitability-switching GPU miner
+→ ~90–150W optimized target
+
+Power target
+→ roughly 200–250W total mining load, rather than 350W+ unrestricted
+
+Mining income
+→ probably around $0.85–$0.95/day gross at today's conditions
+
+Electricity
+→ roughly $0.53–$0.84/day, depending on power tuning and season
+
+So we're probably looking at something in the neighborhood of:
+
+$3–$10/month actual profit
+
+right now.
+
+That sounds hilariously tiny until we distinguish between profit and crypto produced.
+
+We might mine something like:
+
+$25–$30/month crypto
+
+while paying:
+
+$18–$25 electricity
+
+And instead of cashing out that $25–$30:
+
+Mining
+→ $27 crypto
+→ convert to SOL
+→ stake
+
+Next month:
+
+Mining
+→ another $27
+→ SOL
+
+Meanwhile:
+
+existing SOL
+→ staking rewards
+
+Now the "garden" slowly gets larger.
+
+There's another experiment I'd absolutely run
+
+Rather than assume published power numbers, we should benchmark your exact PC.
+
+Your particular 5800XT, RAM timings, motherboard, GPU model and power settings will affect this considerably.
+
+We could test:
+
+CPU only
+→ XMRig for ~15 minutes
+
+Record:
+
+H/s
+CPU package watts
+temperature
+system wall watts if available
+
+Then:
+
+GPU only
+→ mining
+
+Record:
+
+hashrate
+watts
+temperature
+$/day
+
+Then progressively undervolt/power-limit.
+
+The metric we're chasing isn't highest hash rate.
+
+It's:
+
+revenue ÷ watts
+
+For example, suppose:
+
+100% GPU power
+
+150W
+$0.65/day
+
+but:
+
+70% power
+
+105W
+$0.59/day
+
+You've sacrificed only:
+
+9% revenue
+
+while reducing power:
+
+30%.
+
+That's exactly the sort of optimization that could make this work with your electricity prices.
+
+And because you're in Arizona, I'd probably design the final version so summer and winter behave differently rather than pretending electricity and cooling cost the same all year.
+
+Your electricity rates actually make a fun chart of how aggressively the "garden" should operate:
+
+24/7 mining electricity cost
+
+Estimated monthly electricity cost at your three rates for several mining power targets.
+
+Winter 10.97¢
+Summer 12.04¢
+Peak 13.98¢
+$0
+$8
+$16
+$24
+$32
+100W
+148W
+250W
+280W
+
+Does not include the secondary cooling cost from your home's AC.
+
+The next thing I'd do isn't buy anything. We should benchmark the 5800XT and 3060 Ti you already have. Once we know their actual hash rates, watts and temperatures, we can build the first real Crypto Hydroponics model around your machine instead of internet averages—and then decide exactly what to mine, when to run it, what to convert it into, and how frequently to stake it.
+
+I had this other idea that I'm working on but it wouldn't be consistent and riskier than mining. I'm building a project that uses the derive.xyz api to analyze options trading on crypto wallets. I find wallets that have strong results and build a system to analyze new trades and decide to copy them. that's a lot riskier then mining, could have more potential, a lot more tweaking, etc. mining would be more consistent without much growth unless I buy more hardware but the cost for hardware vs income probably isn't great. 
+
+Exactly. I think these are actually two very different kinds of "production systems," and putting them together makes your hydroponics concept more interesting than either one alone.
+
+Mining is essentially the boring base layer: predictable-ish production, measurable electricity cost, limited downside because you're not risking much capital beyond electricity/hardware wear, but terrible scalability if you have to buy hardware at retail.
+
+Your Derive wallet-copying project is almost the opposite: very little physical infrastructure, potentially much higher return on capital, but returns are uncertain and your principal is actually at risk.
+
+I'd picture the overall experiment like this:
+
+Layer 1 — Mining ("the solar panels")
+
+PC → mined crypto → convert → SOL/ETH → stake
+
+The objective isn't huge returns. It's generating a small stream of crypto without continually contributing cash.
+
+Layer 2 — Staking ("the reservoir")
+
+SOL/ETH → staking → more SOL/ETH
+
+This becomes the relatively passive accumulation layer. Mining feeds it, staking compounds it.
+
+Layer 3 — Derive strategy ("the greenhouse")
+
+Capital → identify successful wallets → analyze trades → selectively copy → profits
+
+Rather than automatically compounding all of those profits back into options, you could periodically harvest some.
+
+For example:
+
+Derive strategy makes $100
+→ $50 stays as strategy capital
+→ $25 → staking
+→ $25 → USDG / cash reserve
+
+Now successful trading grows the safer portions of the system rather than continuously increasing the amount at risk.
+
+And if the strategy loses money, you don't pull money backward out of staking to replenish it.
+
+That's an important rule I'd consider.
+
+The Derive project has much more interesting scalability
+
+This is probably the biggest distinction.
+
+Suppose our mining optimization eventually produces:
+
+$8/month profit on existing hardware.
+
+To double that, we'd potentially need another GPU.
+
+Spend:
+
+$250–400
+
+to produce another:
+
+$5–10/month
+
+That's an ugly capital return, especially considering depreciation, electricity and cooling.
+
+Your Derive system doesn't have that problem.
+
+If you've actually demonstrated an edge at:
+
+$500 capital → +2%/month
+
+then theoretically:
+
+$1,000 → $20
+$5,000 → $100
+$10,000 → $200
+
+The computer doing the analysis barely cares whether you're managing $500 or $10,000.
+
+Of course, the enormous qualifier is whether the 2% represents a genuine repeatable edge rather than luck, selection bias or overfitting.
+
+That's where I think your project gets fascinating.
+
+Copying "successful wallets" has some nasty traps
+
+The hardest part probably isn't finding wallets with impressive historical P&L. It's figuring out why they're successful and whether their observable trades are actually copyable.
+
+Imagine Wallet A has:
+
++$240,000 lifetime P&L
+72% profitable trades
+Sharpe 2.1
+
+Looks incredible.
+
+But perhaps the wallet:
+
+hedges positions somewhere else you can't see,
+holds spot elsewhere,
+trades on multiple exchanges,
+is market-making rather than expressing directional views,
+gets substantially better entry prices,
+trades sizes that affect execution,
+has several wallets,
+uses strategies where you're seeing only one leg,
+or simply got extraordinarily lucky on several giant positions.
+
+You could copy what appears to be:
+
+Buy BTC $150k call.
+
+while the actual trader's portfolio is:
+
+Long call + short BTC perpetual + spot BTC + another Derive option.
+
+You've copied an entirely different exposure.
+
+That's why I'd actually make wallet classification one of the biggest components of your system.
+
+There's also a really important statistical experiment available
+
+Instead of immediately asking:
+
+"Which wallets should I copy?"
+
+I'd first ask:
+
+"Does past wallet performance predict future wallet performance?"
+
+That's testable with the historical Derive data you're already collecting.
+
+Take a historical date—say January 1.
+
+Pretend that's today.
+
+Your algorithm is only allowed to see information before January 1.
+
+Rank the wallets:
+
+Tier A
+top scoring
+
+Tier B
+good
+
+Tier C
+average
+
+Tier D
+poor
+
+Then advance the simulation 30 days.
+
+What happened?
+
+If the historical ranking actually contains predictive information, we'd expect something like:
+
+Wallet group	Following 30-day return
+A	+4.8%
+B	+2.1%
+C	+0.4%
+D	-1.3%
+
+Then roll forward another month and repeat.
+
+That's dramatically stronger evidence than finding wallets today that performed well historically.
+
+You can eventually test things like:
+
+Last 30-day performance → next 30 days
+
+Last 90-day performance → next 30 days
+
+Sharpe → future performance
+
+Win rate → future performance
+
+Average trade size → future performance
+
+Options strategy → future performance
+
+BTC vs ETH vs SOL specialists
+
+Directional vs volatility traders
+
+Frequency of trading
+
+Wallet age
+
+You might discover something surprising like:
+
+Lifetime P&L has almost no predictive value, but wallets with positive 90-day P&L + high trade count + consistent position sizing significantly outperform during the following 30 days.
+
+That would start looking like an actual signal.
+
+Then I'd separate "signal discovery" from "capital allocation"
+
+Your system could eventually have three stages:
+
+Observe
+
+Derive API → wallet database → positions/trades → performance history
+
+↓
+
+Score
+
+Consistency
+Risk-adjusted return
+Drawdown
+Trade frequency
+Strategy classification
+Copyability
+Recent performance
+Historical predictive score
+
+↓
+
+Execute
+
+Wallet opens trade
+→ system analyzes trade
+→ confidence score
+→ position-sizing model
+→ copy / reject
+
+That last distinction is important.
+
+You don't necessarily want:
+
+Good wallet traded → COPY.
+
+You want:
+
+Good wallet traded → evaluate this specific trade.
+
+Maybe Wallet #382 is excellent at selling ETH volatility but mediocre directionally.
+
+Your system sees it sell ETH puts.
+
+That's historically within its edge:
+
+COPY — 84% confidence
+
+Same wallet suddenly buys a huge SOL call:
+
+REJECT — 31% confidence
+
+Now you've gone beyond copy trading. You're effectively trying to identify trader-specific alpha.
+
+And this fits your "hydroponics" system nicely
+
+Eventually you could have something like:
+
+Mining
+→ tiny predictable production
+
+↓
+
+Staking
+→ passive compounding
+
+↑
+
+Derive strategy
+→ higher-risk variable production
+→ harvest successful months into staking
+
+↓
+
+USDG / Treasuries
+→ reserve
+
+The really interesting rule would be that risk only flows downward.
+
+Mining profits can enter Derive.
+
+Derive profits can enter staking.
+
+Staking rewards can enter the reserve.
+
+But reserve money doesn't rescue Derive losses.
+
+That creates a ratchet where successful experimentation gradually converts speculative gains into assets you're less willing to risk.
+
+And I agree with your assessment of mining hardware. I'd absolutely mine with the 5800XT + 3060 Ti because you already own them. I wouldn't buy another GPU yet. First determine actual $/kWh efficiency. If spending $350 on another GPU gives us $6/month incremental profit, we'd be looking at nearly a five-year simple payback before considering depreciation or AC. That's not compelling.
+
+The Derive system is where I'd put the engineering effort rather than the capital. Mining can quietly run in the background while you develop and backtest the much more interesting system.
+
+And because you're still in the experimentation phase, we could eventually build one dashboard for the entire thing: electricity → mining production → staking balance → staking rewards → Derive paper-trading performance → live-strategy capital → harvested profits → total system return. That would make the "crypto hydroponics" concept an actual measurable experiment rather than a collection of investments.
+
+ive heard of sites where you can rent hardware for crypto mining like Nicehash, miningrigrentals, or some other data center service but ive heard a lot of not so great things. but i agre that the derive strategy could be a good angle if it works
+
+I think that distinction matters a lot. There are really three different ideas hiding under "rent hardware for mining," and only one is particularly attractive for what you're trying to build.
+
+NiceHash is primarily a hashpower marketplace, not traditional cloud mining: miners sell computational power and buyers pay to direct that hashpower toward a pool. NiceHash explicitly describes itself as connecting buyers and sellers rather than owning/renting its own mining equipment.
+
+MiningRigRentals is more literal—you rent someone else's rig/hashrate for a specified period and point it at your mining pool. It also lets owners list their hardware for rent; MRR currently charges rig owners 3% of rental revenue.
+
+Then there are "give us $1,000 and we'll mine for you for three years" cloud-mining contracts. That's the category I'd be extremely cautious about. The CFTC/SEC have specifically warned about fraudulent crypto sites claiming to operate mining farms and promising high or guaranteed returns.
+
+The fundamental problem with renting mining power
+
+Even with a legitimate marketplace, there's an economic question I have trouble getting around:
+
+Why would someone rent me $10 worth of expected mining production for $8?
+
+Usually they won't.
+
+The owner of the hardware understands their electricity cost and expected mining revenue. So the rental price generally needs to compensate them for:
+
+electricity + hardware + depreciation + profit
+
+and then the marketplace gets its cut.
+
+For you to make money as the renter, something unusual generally has to happen:
+
+Mining revenue > rental price + pool fees + marketplace costs
+
+That can happen—coin price changes, difficulty changes, temporarily mispriced hashpower, new coin launches, solo-mining luck, etc.—but then we've moved away from the predictable "hydroponics" concept and into another speculative strategy.
+
+That's actually why renting out hardware interests me more than renting hardware in your situation.
+
+Your 3060 Ti could theoretically do:
+
+Not rented → mine most profitable coin
+
+Rented at sufficiently high price → sell hashpower
+
+↓
+receive crypto
+
+↓
+SOL/ETH
+
+↓
+stake
+
+MRR actually allows exactly this sort of configuration: the rig mines to your normal pool when it isn't rented and switches to the renter's configured pool when rented.
+
+Whether anyone would pay enough for a single 3060 Ti to make that worthwhile is another question. 😄 But we could measure it.
+
+I think Derive is the more promising experiment
+
+Not because options are inherently better than mining. They're obviously much more dangerous.
+
+It's because software has almost zero marginal cost.
+
+Imagine we somehow develop an excellent mining optimization system.
+
+We squeeze your PC from:
+
+$7/month → $11/month
+
+Great. We made an extra $4.
+
+Now we've pretty much hit the physical limit.
+
+To double production:
+
+buy another GPU.
+
+To double again:
+
+buy another GPU.
+
+Eventually:
+
+GPUs → electrical circuits → cooling → racks → space → maintenance.
+
+That's how you accidentally end up operating a tiny data center for mediocre returns.
+
+The Derive system is different.
+
+Suppose we eventually discover that your wallet-scoring model produces a genuine advantage.
+
+You don't necessarily need additional hardware to go:
+
+$500 strategy capital → $2,000 → $5,000.
+
+The same program processes the trades.
+
+So I'd actually treat mining as the fun baseline experiment and Derive as the research project.
+
+And I'd be extremely conservative with Derive initially
+
+I'd want to progress through something like:
+
+Stage 1 — Historical
+
+No money.
+
+Find wallets → reconstruct trades → score wallets → walk-forward backtest.
+
+↓
+
+Stage 2 — Live shadow trading
+
+Still no money.
+
+Your system sees:
+
+Wallet 0x82F... opened ETH position.
+
+It records:
+
+COPY
+Entry available to us: $X
+Position size: $Y
+
+But doesn't execute anything.
+
+Then we see what our theoretical trade would have actually done—not merely what the wallet reports.
+
+↓
+
+Stage 3 — Tiny capital
+
+Something like $100–$250.
+
+Now we're testing execution, slippage, fees, API latency and all the annoying things the backtest didn't capture.
+
+↓
+
+Stage 4 — Gradual scaling
+
+Only if live results resemble the walk-forward results.
+
+And I'd probably have an explicit maximum drawdown that kills the strategy.
+
+The really valuable thing you could discover isn't necessarily "Wallet #382 is really good."
+
+It's something more generalizable like:
+
+Wallets that have traded for >180 days, made >100 trades, maintain a positive 90-day Sharpe, keep position sizing below X% of portfolio, specialize in ETH options, and have <Y% drawdown are significantly more likely to outperform during their next 30 trades.
+
+Now you've discovered a wallet-selection signal.
+
+And then you can test whether specific trades contain additional signals:
+
+wallet quality × trade type × expiration × moneyness × implied volatility × position size × recent wallet behavior
+
+That starts becoming a genuinely interesting quantitative research project.
+
+It also gives our ridiculous Crypto Hydroponics project a nice division of labor:
+
+⛏️ Mining — production
+Generate a tiny stream of crypto from hardware you already own.
+
+🌱 Staking — accumulation
+Compound crypto that we want to hold.
+
+🧪 Derive — experimentation
+Try to discover an actual trading edge without risking meaningful capital until we've demonstrated one.
+
+🏦 HYSA/Treasuries/USDG/income investments — reserve
+Capital that doesn't need to participate in the experiment.
+
+I particularly like the idea that we don't need Derive to make money initially. The first milestone could simply be proving that wallets selected by the algorithm outperform randomly selected wallets out of sample. If we can't establish that, we've potentially saved ourselves a lot of money by discovering it before putting capital behind the strategy.
+
+And meanwhile, we can get your existing 5800XT/3060 Ti mining and start collecting real power/hashrate/profitability data. The mining side becomes our boring little control group while the Derive side gets all the experimentation.

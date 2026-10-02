@@ -71,7 +71,15 @@ class _NoopCursor:
 
 class CloudConnection:
     def __init__(self, dsn):
-        self._conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+        # prepare_threshold=None: disables psycopg3's default auto-prepare
+        # (server-side PREPARE after a statement's 5th use). Required for
+        # Supabase's transaction-mode pooler (Supavisor/PgBouncer) -- a
+        # prepared statement doesn't survive the pooler handing this
+        # connection's next query to a different backend, which every
+        # live-path script here would hit eventually (e.g. live_poll.py's
+        # ingest() re-running the same upsert_trade() INSERT well past 5
+        # times in one run).
+        self._conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False, prepare_threshold=None)
 
     def execute(self, sql, params=()):
         if sql.strip().upper().startswith("PRAGMA"):

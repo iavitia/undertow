@@ -20,7 +20,6 @@ than a live poll trying to catch that exact moment. A buy's loss is
 already naturally bounded at -100% (exit_price can't go below 0), so the
 floor only ever changes anything for sells.
 """
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -28,7 +27,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis.pnl import intrinsic_value, nearest_index_price
-from config import DB_PATH, NAKED_SHORT_LOSS_FLOOR_PCT, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from config import NAKED_SHORT_LOSS_FLOOR_PCT, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from db.cloud_conn import get_live_conn
 
 
 def resolve(conn):
@@ -71,8 +71,7 @@ def resolve(conn):
 
 
 def run():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_live_conn()
     n = resolve(conn)
     print(f"resolved {n} paper trade(s)")
     conn.close()

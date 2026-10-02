@@ -70,7 +70,13 @@ def upsert_trade(conn, currency, trade):
         INSERT INTO wallets (address, chain, first_seen)
         VALUES (?, 'derive-l2', ?)
         ON CONFLICT (address) DO UPDATE SET
-            first_seen = MIN(first_seen, excluded.first_seen)
+            -- CASE, not MIN(a,b): SQLite's MIN doubles as a 2-arg scalar
+            -- "least of" function, but Postgres's MIN is aggregate-only
+            -- (needs LEAST(), which SQLite lacks) -- CASE is the one form
+            -- both engines accept identically, since this function is
+            -- shared between the local-only full backfill (SQLite) and
+            -- the cloud live-path ingest (Postgres, see db/cloud_conn.py).
+            first_seen = CASE WHEN wallets.first_seen < excluded.first_seen THEN wallets.first_seen ELSE excluded.first_seen END
         """,
         (trade["wallet"], trade["timestamp"]),
     )

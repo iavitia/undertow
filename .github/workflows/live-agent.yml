@@ -1,0 +1,42 @@
+name: Live agent (real testnet orders)
+
+# Runs scripts/run_live_agent.py against the hosted Supabase Postgres DB.
+# Refuses to place any order unless EXECUTION_ENABLED=true (see
+# config.py / the script's own docstring) -- per the hosting plan's
+# staged rollout, this secret should stay "false" until ingestion and
+# paper trading have run unattended in the cloud for a real stretch
+# first. Independent cursor from watchlist-agent.yml
+# (watchlist.live_last_checked_ts vs. last_checked_ts), so the two
+# workflows don't need to be sequenced relative to each other.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: live-agent
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/run_live_agent.py
+        env:
+          CLOUD_DATABASE_URL: ${{ secrets.CLOUD_DATABASE_URL }}
+          DERIVE_WALLET: ${{ secrets.DERIVE_WALLET }}
+          DERIVE_SESSION_KEY: ${{ secrets.DERIVE_SESSION_KEY }}
+          DERIVE_SUBACCOUNT_ID: ${{ secrets.DERIVE_SUBACCOUNT_ID }}
+          DERIVE_ETH_CHAIN: ${{ secrets.DERIVE_ETH_CHAIN }}
+          EXECUTION_ENABLED: ${{ secrets.EXECUTION_ENABLED }}

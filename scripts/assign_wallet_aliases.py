@@ -39,7 +39,7 @@ def assign_missing(conn):
     instead of needing this whole script re-run by hand (see conversation:
     77 live-discovered wallets went un-aliased until this was noticed on
     the Live Feed tab)."""
-    addresses = [r[0] for r in conn.execute("SELECT address FROM wallets WHERE alias IS NULL").fetchall()]
+    addresses = [r["address"] for r in conn.execute("SELECT address FROM wallets WHERE alias IS NULL").fetchall()]
     if addresses:
         conn.executemany(
             "UPDATE wallets SET alias = ? WHERE address = ?",
@@ -51,7 +51,8 @@ def assign_missing(conn):
 
 def run():
     conn = sqlite3.connect(DB_PATH)
-    addresses = [r[0] for r in conn.execute("SELECT address FROM wallets").fetchall()]
+    conn.row_factory = sqlite3.Row
+    addresses = [r["address"] for r in conn.execute("SELECT address FROM wallets").fetchall()]
     conn.executemany(
         "UPDATE wallets SET alias = ? WHERE address = ?",
         [(alias_for(a), a) for a in addresses],

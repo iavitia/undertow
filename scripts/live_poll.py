@@ -11,7 +11,6 @@ reason for a second copy to exist and drift.
 
 Run standalone (`python scripts/live_poll.py`) or import ingest() from
 scripts/run_watchlist_agent.py."""
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -19,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from clients.derive_client import iter_trade_history
-from config import BACKFILL_START_ISO, DB_PATH
+from config import BACKFILL_START_ISO
+from db.cloud_conn import get_live_conn
 from scripts.backfill_derive import upsert_trade
 
 CURRENCIES = ("ETH", "BTC", "SOL")
@@ -74,8 +74,7 @@ def ingest(conn):
 
 
 def run():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_live_conn()
     n = ingest(conn)
     print(f"ingested {n} trade leg(s)")
     conn.close()

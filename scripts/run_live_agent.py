@@ -39,7 +39,6 @@ strike, not testnet's own real settlement. Acceptable for now since the
 capital at risk is nominal testnet money and the goal is proving the
 mechanics -- a real-money version would need testnet's own settlement
 price, not this project's existing mainnet-sourced one."""
-import sqlite3
 import sys
 import time
 from decimal import Decimal
@@ -48,7 +47,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from clients.derive_execution_client import estimate_fee, get_account_state, get_instrument, get_ticker, place_order
-from config import DB_PATH, DERIVE_SUBACCOUNT_ID, EXECUTION_ENABLED
+from config import DERIVE_SUBACCOUNT_ID, EXECUTION_ENABLED
+from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.run_watchlist_agent import find_new_candidates
 
 # Real testnet orders confirmed this session: BTC/ETH naked-short margin
@@ -167,7 +167,7 @@ def run_live_tick(conn):
                      now_ms),
                 )
                 skipped_weak_edge += 1
-            except sqlite3.IntegrityError:
+            except INTEGRITY_ERRORS:
                 pass
             continue
 
@@ -245,7 +245,7 @@ def run_live_tick(conn):
             )
             placed += 1
             print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}), margin=${margin}")
-        except sqlite3.IntegrityError:
+        except INTEGRITY_ERRORS:
             pass
 
     conn.commit()
@@ -257,8 +257,7 @@ def run():
         print("EXECUTION_ENABLED is false -- refusing to place any real orders. Set it in .env to run this for real.")
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_live_conn()
     conn.execute("PRAGMA busy_timeout = 8000")
 
     placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable = run_live_tick(conn)

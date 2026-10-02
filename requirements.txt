@@ -6,6 +6,11 @@ uvicorn
 watchfiles
 python-dotenv
 eth_account
+# Cloud hosting path only (db/cloud_conn.py) -- the local/heavy pipeline
+# keeps using sqlite3 (stdlib) against the full local archive, unchanged.
+# [binary] avoids needing a local libpq/C build toolchain, useful on both
+# this machine and GitHub Actions' runners.
+psycopg[binary]
 # NOT on PyPI despite its own README claiming `pip install derive-py` --
 # confirmed via PyPI's JSON API (404). Install from GitHub directly.
 derive_py @ git+https://github.com/derivexyz/derive-py.git

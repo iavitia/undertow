@@ -24,7 +24,6 @@ observability (collection only, no longer triggers an early exit -- see
 conversation) and scripts/resolve_paper_trades.py's loss floor
 (config.NAKED_SHORT_LOSS_FLOOR_PCT) for how a naked short's risk is bounded
 instead: at settlement, not via a live poll trying to catch it mid-life."""
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -33,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis.pnl import intrinsic_value, nearest_index_price
 from clients.derive_client import get_ticker
-from config import COPY_STALENESS_WINDOW_MS, DB_PATH, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from config import COPY_STALENESS_WINDOW_MS, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.assign_wallet_aliases import assign_missing
 from scripts.live_poll import ingest
 from scripts.resolve_paper_trades import resolve
@@ -222,7 +222,7 @@ def detect_new_positions(conn):
                 opened += 1
             elif status == "skipped_weak_edge":
                 skipped_weak_edge += 1
-        except sqlite3.IntegrityError:
+        except INTEGRITY_ERRORS:
             pass  # source_event_id UNIQUE constraint -- already have a row for this trade
 
     conn.commit()
@@ -422,11 +422,12 @@ def check_wallet_outcomes(conn):
 
 
 def run():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    # this now runs unattended every 15 min while the API server (and
-    # occasional manual scripts) can also be writing -- wait briefly on a
-    # lock instead of failing instantly (see api/main.py's get_conn()).
+    conn = get_live_conn()
+    # Meaningful locally (SQLite, single-writer file lock -- this runs
+    # unattended every 15 min while the API server or a manual script can
+    # also be writing); a no-op against the cloud DB (db/cloud_conn.py's
+    # CloudConnection), where Postgres's real client-server MVCC makes the
+    # whole lock-contention failure mode this guards against moot.
     conn.execute("PRAGMA busy_timeout = 8000")
 
     n_ingested = ingest(conn)

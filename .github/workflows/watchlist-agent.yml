@@ -1,0 +1,38 @@
+name: Watchlist agent (ingest + paper trading)
+
+# Runs scripts/run_watchlist_agent.py against the hosted Supabase Postgres
+# DB (db/cloud_conn.py's CloudConnection) -- one tick already does
+# ingest + alias assignment + candidate detection/paper fills + mark
+# recording + settlement + wallet-outcome checks (see
+# scripts/run_watchlist_agent.py's run()), so this is the only workflow
+# needed for the non-execution half of the live path. See the hosting
+# plan: requalification frequency (which wallets are even on the
+# watchlist) is a separate, local-only, manual lever
+# (scripts/sync_watchlist_to_cloud.py) -- unaffected by this schedule.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: watchlist-agent
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/run_watchlist_agent.py
+        env:
+          CLOUD_DATABASE_URL: ${{ secrets.CLOUD_DATABASE_URL }}

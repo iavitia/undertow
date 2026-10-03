@@ -55,11 +55,17 @@ from scripts.run_watchlist_agent import find_new_candidates
 # ran $100-300+ per contract against $5-25 premium -- structurally
 # unworkable for the account size this is being proven out at. SOL margin
 # on the same size of position came in around $18/contract, an order of
-# magnitude more tractable. Real execution stays SOL-only until there's
-# actual capital behind this that could sustain BTC/ETH-scale margin;
-# BTC/ETH candidates still flow through the paper-trading track record
-# via scripts/run_watchlist_agent.py as before, just not real orders here.
-LIVE_ASSETS = ("SOL",)
+# magnitude more tractable. That constraint is specific to SELLING
+# (naked-short margin) though -- buying an option only costs the premium,
+# paid upfront, no margin at all, the same as any other venue. BTC/ETH
+# buy-side candidates have real, backtested edge (see
+# wallet_edge_profile's buy-side return_lcb/top1_gain_share gate) and
+# aren't blocked by the margin problem that motivated this restriction,
+# so they're eligible for real execution; BTC/ETH sells stay paper-only
+# via scripts/run_watchlist_agent.py until there's capital behind this
+# that could sustain BTC/ETH-scale short margin.
+LIVE_ASSETS = ("SOL", "BTC", "ETH")
+LIVE_SHORT_ASSETS = ("SOL",)
 
 # Premium must clear this multiple of the estimated fee before a real
 # order gets placed -- see conversation: three real orders this session
@@ -121,12 +127,14 @@ def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
     entry, tries to place a real testnet order instead of recording a
-    simulated fill. SOL-only (see LIVE_ASSETS), sized to clear a real fee
-    multiple rather than always trading at instrument minimum (see
-    _size_for_fee_coverage), and stops placing new orders partway through
-    a tick if buying power has dropped too far (see
-    MIN_BUYING_POWER_FRACTION). Returns (placed, skipped_weak_edge,
-    skipped_wrong_asset, skipped_uneconomical, skipped_untradeable)."""
+    simulated fill. SOL (buy or sell) plus BTC/ETH buy-side only (see
+    LIVE_ASSETS/LIVE_SHORT_ASSETS -- BTC/ETH sells are margin-prohibitive
+    at this account size), sized to clear a real fee multiple rather than
+    always trading at instrument minimum (see _size_for_fee_coverage),
+    and stops placing new orders partway through a tick if buying power
+    has dropped too far (see MIN_BUYING_POWER_FRACTION). Returns (placed,
+    skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical,
+    skipped_untradeable)."""
     now_ms = int(time.time() * 1000)
     placed = 0
     skipped_weak_edge = 0
@@ -147,6 +155,9 @@ def run_live_tick(conn):
 
     for wallet, c, status, edge in find_new_candidates(conn, cursor_column="live_last_checked_ts"):
         if c["asset"] not in LIVE_ASSETS:
+            skipped_wrong_asset += 1
+            continue
+        if c["side"] == "sell" and c["asset"] not in LIVE_SHORT_ASSETS:
             skipped_wrong_asset += 1
             continue
 
@@ -264,7 +275,7 @@ def run():
 
     print(
         f"placed {placed} real order(s), skipped {skipped_weak_edge} weak-edge, "
-        f"skipped {skipped_wrong_asset} non-SOL, skipped {skipped_uneconomical} uneconomical, "
+        f"skipped {skipped_wrong_asset} ineligible asset/side, skipped {skipped_uneconomical} uneconomical, "
         f"skipped {skipped_untradeable} untradeable-on-testnet"
     )
     conn.close()

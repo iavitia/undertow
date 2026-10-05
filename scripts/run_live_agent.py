@@ -46,26 +46,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from clients.derive_execution_client import estimate_fee, get_account_state, get_instrument, get_ticker, place_order
+from clients.derive_execution_client import (
+    estimate_fee,
+    get_account_state,
+    get_instrument,
+    get_ticker,
+    place_order,
+    simulate_margin,
+)
 from config import DERIVE_SUBACCOUNT_ID, EXECUTION_ENABLED
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.run_watchlist_agent import find_new_candidates
 
-# Real testnet orders confirmed this session: BTC/ETH naked-short margin
-# ran $100-300+ per contract against $5-25 premium -- structurally
-# unworkable for the account size this is being proven out at. SOL margin
-# on the same size of position came in around $18/contract, an order of
-# magnitude more tractable. That constraint is specific to SELLING
-# (naked-short margin) though -- buying an option only costs the premium,
-# paid upfront, no margin at all, the same as any other venue. BTC/ETH
-# buy-side candidates have real, backtested edge (see
-# wallet_edge_profile's buy-side return_lcb/top1_gain_share gate) and
-# aren't blocked by the margin problem that motivated this restriction,
-# so they're eligible for real execution; BTC/ETH sells stay paper-only
-# via scripts/run_watchlist_agent.py until there's capital behind this
-# that could sustain BTC/ETH-scale short margin.
+# All three assets, both sides, are eligible for real execution -- BTC/ETH
+# naked-short margin ($100-300+/contract against $5-25 premium, confirmed
+# via real testnet orders) used to rule BTC/ETH sells out entirely, but
+# that was a blunt per-asset carve-out standing in for the real concern:
+# margin eating too much of the account. MAX_MARGIN_UTILIZATION_FRACTION
+# below replaces it with the actual constraint (see conversation) --
+# every order, any asset/side, is pre-checked against it, so BTC/ETH
+# sells are allowed through but capped by cost rather than excluded by
+# asset.
 LIVE_ASSETS = ("SOL", "BTC", "ETH")
-LIVE_SHORT_ASSETS = ("SOL",)
+
+# Standing portfolio-level cap, not a per-tick one: total margin currently
+# committed across every real open position must never exceed this
+# fraction of total account value (collaterals_initial_margin), checked
+# fresh before every single order via a margin simulation (see
+# _margin_utilization_after and conversation -- placing real orders to
+# probe margin risks them actually filling on testnet's thin, one-sided
+# books, which happened and left stray positions needing manual cleanup;
+# simulate_margin() never touches the real order book). 0.5 at the
+# account's current ~$100k value means ~$50k of margin in use, max.
+MAX_MARGIN_UTILIZATION_FRACTION = 0.5
 
 # Premium must clear this multiple of the estimated fee before a real
 # order gets placed -- see conversation: three real orders this session
@@ -123,24 +136,57 @@ def _margin_for_instrument(state, instrument_name):
     return None
 
 
+def _margin_utilization_after(state, new_instrument_name, new_side, new_amount):
+    """What fraction of total account value (collaterals_initial_margin)
+    would be committed as margin if this candidate were added on top of
+    every real position currently open, per simulate_margin(). Checked
+    fresh before every order (not just once per tick) against
+    MAX_MARGIN_UTILIZATION_FRACTION -- the standing portfolio-level cap
+    that replaced the old SOL-only/BTC-ETH-buy-only asset carve-out (see
+    conversation)."""
+    simulated_positions = {}
+    for p in state.get("positions", []):
+        amt = float(p.get("amount") or 0)
+        if amt != 0:
+            simulated_positions[p["instrument_name"]] = amt
+    delta = float(new_amount) if new_side == "buy" else -float(new_amount)
+    simulated_positions[new_instrument_name] = simulated_positions.get(new_instrument_name, 0.0) + delta
+
+    total_value = float(state.get("collaterals_initial_margin") or 0)
+    if total_value <= 0:
+        return 1.0  # no collateral at all -- treat as fully committed, refuse
+
+    result = simulate_margin(
+        simulated_positions=[{"instrument_name": k, "amount": str(v)} for k, v in simulated_positions.items()],
+        simulated_collaterals=[
+            {"asset_name": c["asset_name"], "amount": c["amount"]} for c in state.get("collaterals", [])
+        ],
+    )
+    margin_used = total_value - float(result["post_initial_margin"])
+    return margin_used / total_value
+
+
 def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
     entry, tries to place a real testnet order instead of recording a
-    simulated fill. SOL (buy or sell) plus BTC/ETH buy-side only (see
-    LIVE_ASSETS/LIVE_SHORT_ASSETS -- BTC/ETH sells are margin-prohibitive
-    at this account size), sized to clear a real fee multiple rather than
-    always trading at instrument minimum (see _size_for_fee_coverage),
-    and stops placing new orders partway through a tick if buying power
-    has dropped too far (see MIN_BUYING_POWER_FRACTION). Returns (placed,
-    skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical,
-    skipped_untradeable)."""
+    simulated fill. All three assets, both sides (see LIVE_ASSETS), sized
+    to clear a real fee multiple rather than always trading at instrument
+    minimum (see _size_for_fee_coverage), checked against the standing
+    portfolio margin cap before every order (see
+    _margin_utilization_after/MAX_MARGIN_UTILIZATION_FRACTION), and stops
+    placing new orders partway through a tick if buying power has dropped
+    too far within just this tick (see MIN_BUYING_POWER_FRACTION, a
+    separate, complementary guard). Returns (placed, skipped_weak_edge,
+    skipped_wrong_asset, skipped_uneconomical, skipped_untradeable,
+    skipped_margin_cap)."""
     now_ms = int(time.time() * 1000)
     placed = 0
     skipped_weak_edge = 0
     skipped_wrong_asset = 0
     skipped_uneconomical = 0
     skipped_untradeable = 0
+    skipped_margin_cap = 0
 
     # "Buying power" isn't a literal field -- confirmed live this session
     # the closest equivalent is the account's net initial_margin
@@ -152,12 +198,14 @@ def run_live_tick(conn):
     starting_buying_power = float(starting_state.get("initial_margin") or 0)
     buying_power_floor = starting_buying_power * MIN_BUYING_POWER_FRACTION
     low_buying_power = False
+    # Kept current after every real order placed this tick, so each
+    # candidate's margin-cap check (_margin_utilization_after) reflects
+    # every order that's already gone out, not just the tick's starting
+    # state.
+    current_state = starting_state
 
     for wallet, c, status, edge in find_new_candidates(conn, cursor_column="live_last_checked_ts"):
         if c["asset"] not in LIVE_ASSETS:
-            skipped_wrong_asset += 1
-            continue
-        if c["side"] == "sell" and c["asset"] not in LIVE_SHORT_ASSETS:
             skipped_wrong_asset += 1
             continue
 
@@ -216,6 +264,17 @@ def run_live_tick(conn):
             continue
 
         try:
+            utilization = _margin_utilization_after(current_state, c["instrument"], c["side"], amount)
+        except Exception as e:
+            print(f"{c['instrument']} margin simulation failed, skipping: {e}")
+            skipped_untradeable += 1
+            continue
+        if utilization > MAX_MARGIN_UTILIZATION_FRACTION:
+            print(f"{c['instrument']} skipped -- would push margin utilization to {utilization:.1%}, over the {MAX_MARGIN_UTILIZATION_FRACTION:.0%} cap")
+            skipped_margin_cap += 1
+            continue
+
+        try:
             order_result = place_order(
                 instrument_name=c["instrument"],
                 direction=c["side"],
@@ -230,6 +289,7 @@ def run_live_tick(conn):
 
         order = order_result["order"]
         state = get_account_state(DERIVE_SUBACCOUNT_ID)
+        current_state = state
         margin = _margin_for_instrument(state, c["instrument"])
 
         current_buying_power = float(state.get("initial_margin") or 0)
@@ -260,7 +320,7 @@ def run_live_tick(conn):
             pass
 
     conn.commit()
-    return placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable
+    return placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable, skipped_margin_cap
 
 
 def run():
@@ -271,12 +331,12 @@ def run():
     conn = get_live_conn()
     conn.execute("PRAGMA busy_timeout = 8000")
 
-    placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable = run_live_tick(conn)
+    placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable, skipped_margin_cap = run_live_tick(conn)
 
     print(
         f"placed {placed} real order(s), skipped {skipped_weak_edge} weak-edge, "
         f"skipped {skipped_wrong_asset} ineligible asset/side, skipped {skipped_uneconomical} uneconomical, "
-        f"skipped {skipped_untradeable} untradeable-on-testnet"
+        f"skipped {skipped_untradeable} untradeable-on-testnet, skipped {skipped_margin_cap} over the margin cap"
     )
     conn.close()
 

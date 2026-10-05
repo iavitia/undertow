@@ -85,12 +85,39 @@ class CloudConnection:
         if sql.strip().upper().startswith("PRAGMA"):
             return _NoopCursor()
         cur = self._conn.cursor()
-        cur.execute(sql.replace("?", "%s"), params)
+        # Postgres aborts the WHOLE transaction on any statement error,
+        # not just that statement -- unlike SQLite, where a caller's
+        # `except sqlite3.IntegrityError: pass` (e.g. a UNIQUE violation
+        # on an expected-duplicate INSERT) only fails that one statement
+        # and the transaction carries on fine. Confirmed live this
+        # session: run_live_agent.py's existing `except INTEGRITY_ERRORS:
+        # pass` pattern (3 call sites total) left the connection in
+        # "current transaction is aborted" for every statement after,
+        # crashing the next unrelated INSERT in the same tick. A
+        # savepoint per call reproduces SQLite's per-statement semantics
+        # -- roll back to just before THIS statement, not the whole
+        # transaction, then re-raise so callers' existing try/except
+        # keeps working unmodified.
+        self._conn.execute("SAVEPOINT cloud_conn_sp")
+        try:
+            cur.execute(sql.replace("?", "%s"), params)
+        except Exception:
+            self._conn.execute("ROLLBACK TO SAVEPOINT cloud_conn_sp")
+            raise
+        else:
+            self._conn.execute("RELEASE SAVEPOINT cloud_conn_sp")
         return cur
 
     def executemany(self, sql, seq_of_params):
         cur = self._conn.cursor()
-        cur.executemany(sql.replace("?", "%s"), seq_of_params)
+        self._conn.execute("SAVEPOINT cloud_conn_sp")
+        try:
+            cur.executemany(sql.replace("?", "%s"), seq_of_params)
+        except Exception:
+            self._conn.execute("ROLLBACK TO SAVEPOINT cloud_conn_sp")
+            raise
+        else:
+            self._conn.execute("RELEASE SAVEPOINT cloud_conn_sp")
         return cur
 
     def commit(self):

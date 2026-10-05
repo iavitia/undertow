@@ -104,12 +104,50 @@ def _private_post(path, body, max_retries=5):
 
 
 def get_account_state(subaccount_id):
-    """Real balance/margin/collateral for one subaccount. The only way to
-    see a real margin requirement -- there is no preview/what-if endpoint
-    (public/order_debug only validates signature construction, confirmed
-    this session) -- so this is meant to be called again right after
-    place_order() to read back what an order actually cost."""
+    """Real balance/margin/collateral for one subaccount. Called again right
+    after place_order() to read back what an order actually cost, and used
+    as the baseline (current positions/collaterals) for simulate_margin()'s
+    what-if checks before placing a new one."""
     return _private_post("/private/get_subaccount", {"subaccount_id": subaccount_id})
+
+
+def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM"):
+    """Public, no auth needed -- the real preview/what-if endpoint
+    (public/order_debug, despite its name, only validates signature
+    construction, not margin; this is the actual one). Confirmed this
+    session against real orders: matches real open_orders_margin almost
+    exactly for perps (within normal price-drift noise), but runs ~1.75x
+    the real RESTING-ORDER margin for at least one tested option strike --
+    likely because this computes true HELD-POSITION margin while a resting
+    order gets a lighter pre-fill reservation, which is what the open_orders_margin
+    manual-probe approach (place a real order, read it back, cancel) actually
+    measures. Deliberately used here instead of that approach: see
+    conversation -- that approach placed real orders that unexpectedly
+    filled (thin one-sided testnet books), leaving unintended short
+    positions needing manual cleanup. This function never touches the real
+    order book at all.
+
+    simulated_positions: [{"instrument_name": ..., "amount": "<signed str, negative=short>"}, ...]
+    simulated_collaterals: [{"asset_name": "USDC", "amount": "<str>"}, ...]
+    margin_type: "SM" (Standard Margin) -- confirmed this session to match
+    this account's own real margin_type (get_account_state()['margin_type']).
+
+    Returns the raw result dict (pre/post_initial_margin, pre/post_maintenance_margin,
+    is_valid_trade) -- same shape as the real account-state margin fields."""
+    resp = requests.post(
+        f"{EXECUTION_BASE_URL}/public/get_margin",
+        json={
+            "margin_type": margin_type,
+            "simulated_positions": simulated_positions,
+            "simulated_collaterals": simulated_collaterals,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(data["error"])
+    return data["result"]
 
 
 def get_instrument(instrument_name):

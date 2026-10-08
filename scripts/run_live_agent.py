@@ -41,7 +41,7 @@ mechanics -- a real-money version would need testnet's own settlement
 price, not this project's existing mainnet-sourced one."""
 import sys
 import time
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -154,26 +154,55 @@ MIN_BUYING_POWER_FRACTION = 0.5
 
 
 def _size_for_fee_coverage(instrument, limit_price, index_price):
-    """Finds the smallest order size (a multiple of the instrument's own
-    minimum_amount, respecting amount_step) where premium collected
-    clears MIN_FEE_COVERAGE_MULTIPLE times the estimated fee -- see
-    conversation and clients/derive_execution_client.estimate_fee.
-    Returns None if even MAX_SIZE_MULTIPLE times the minimum can't clear
-    it (an uneconomical instrument at any reasonable size, not just at
-    the minimum)."""
+    """Finds the smallest order size (respecting amount_step, floored at
+    minimum_amount) where premium collected clears
+    MIN_FEE_COVERAGE_MULTIPLE times the estimated fee -- see conversation
+    and clients/derive_execution_client.estimate_fee.
+
+    Solved exactly rather than searched for: estimate_fee is
+    base_fee + taker_fee_rate * amount * index_price (flat plus linear in
+    amount) and premium is limit_price * amount (also linear, zero
+    intercept), so premium >= N * fee reduces to one linear inequality in
+    amount with a closed-form minimum -- no need to grope for it.
+    A prior version searched by doubling (minimum, 2x, 4x, ...), which
+    could overshoot this true minimum by nearly a full doubling step and
+    needlessly inflate the size (and therefore the margin) a later
+    cap check has to clear; confirmed this cost real candidates on the
+    Fast subaccount that a precisely-sized order would have cleared (see
+    conversation). Since margin scales linearly with size, this exact
+    minimum is also the minimum-margin economical size -- there's no
+    smaller size worth trying after this one.
+
+    Returns None if the per-unit fee rate alone consumes the entire
+    premium regardless of size (uneconomical at any size, not a rounding
+    issue), or if even this true minimum exceeds MAX_SIZE_MULTIPLE times
+    the instrument's minimum_amount (runaway size on a thin-premium
+    instrument, same guard rail the old search had)."""
+    base_fee = float(instrument["base_fee"])
+    taker_fee_rate = float(instrument["taker_fee_rate"])
     amount_step = Decimal(instrument["amount_step"])
     minimum = Decimal(instrument["minimum_amount"])
-    multiple = Decimal(1)
-    while multiple <= MAX_SIZE_MULTIPLE:
-        amount = (minimum * multiple).quantize(amount_step)
-        if amount < minimum:
-            amount = minimum
-        premium = float(amount) * limit_price
-        fee = estimate_fee(instrument, amount, index_price)
-        if premium >= MIN_FEE_COVERAGE_MULTIPLE * fee:
-            return amount
-        multiple *= 2
-    return None
+
+    coefficient = limit_price - MIN_FEE_COVERAGE_MULTIPLE * taker_fee_rate * index_price
+    if coefficient <= 0:
+        return None  # fee's rate component alone eats the whole premium, at any size
+
+    exact_minimum = (MIN_FEE_COVERAGE_MULTIPLE * base_fee) / coefficient
+    amount = (Decimal(str(exact_minimum)) / amount_step).to_integral_value(rounding=ROUND_CEILING) * amount_step
+    if amount < minimum:
+        amount = minimum
+
+    # Confirm the rounded amount actually clears the bar rather than
+    # trusting the arithmetic blindly -- float/Decimal rounding could in
+    # principle leave it one step short.
+    premium = float(amount) * limit_price
+    fee = estimate_fee(instrument, amount, index_price)
+    if premium < MIN_FEE_COVERAGE_MULTIPLE * fee:
+        amount += amount_step
+
+    if amount > minimum * MAX_SIZE_MULTIPLE:
+        return None
+    return amount
 
 
 def _margin_for_instrument(state, instrument_name):

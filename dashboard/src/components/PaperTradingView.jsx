@@ -173,7 +173,7 @@ export function PaperTradingView() {
             <StatCard label="Loss capped" value={summary.loss_capped_count} accent={TOKENS.flare} />
             <StatCard label="Stopped out (retired)" value={summary.stopped_out_count} />
             <StatCard label="Win rate" value={summary.win_rate != null ? `${summary.win_rate}%` : "—"} accent={summary.win_rate >= 50 ? TOKENS.current : TOKENS.bad} />
-            <StatCard label="Total return" value={summary.total_return_pct != null ? `${summary.total_return_pct}%` : "—"} accent={summary.total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
+            <StatCard label="Avg return/trade" value={summary.total_return_pct != null ? `${summary.total_return_pct}%` : "—"} accent={summary.total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
             <StatCard
               label={`Income ($${summary.hypothetical_stake_usd}/trade)`}
               value={summary.total_hypothetical_income_usd != null ? `${summary.total_hypothetical_income_usd >= 0 ? "+" : "-"}$${Math.abs(summary.total_hypothetical_income_usd).toFixed(2)}` : "—"}
@@ -211,7 +211,7 @@ export function PaperTradingView() {
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <StatCard label="Win rate" value={summary.wallet_comparison.our_win_rate != null ? `${summary.wallet_comparison.our_win_rate}%` : "—"} accent={summary.wallet_comparison.our_win_rate >= 50 ? TOKENS.current : TOKENS.bad} />
-                  <StatCard label="Total return" value={summary.wallet_comparison.our_total_return_pct != null ? `${summary.wallet_comparison.our_total_return_pct}%` : "—"} accent={summary.wallet_comparison.our_total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
+                  <StatCard label="Avg return/trade" value={summary.wallet_comparison.our_total_return_pct != null ? `${summary.wallet_comparison.our_total_return_pct}%` : "—"} accent={summary.wallet_comparison.our_total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
                   <StatCard
                     label="Income ($10/trade)"
                     value={summary.wallet_comparison.our_total_hypothetical_income_usd != null ? `${summary.wallet_comparison.our_total_hypothetical_income_usd >= 0 ? "+" : "-"}$${Math.abs(summary.wallet_comparison.our_total_hypothetical_income_usd).toFixed(2)}` : "—"}
@@ -230,7 +230,7 @@ export function PaperTradingView() {
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <StatCard label="Win rate" value={summary.wallet_comparison.wallet_win_rate != null ? `${summary.wallet_comparison.wallet_win_rate}%` : "—"} accent={summary.wallet_comparison.wallet_win_rate >= 50 ? TOKENS.current : TOKENS.bad} />
-                  <StatCard label="Total return" value={summary.wallet_comparison.wallet_total_return_pct != null ? `${summary.wallet_comparison.wallet_total_return_pct}%` : "—"} accent={summary.wallet_comparison.wallet_total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
+                  <StatCard label="Avg return/trade" value={summary.wallet_comparison.wallet_total_return_pct != null ? `${summary.wallet_comparison.wallet_total_return_pct}%` : "—"} accent={summary.wallet_comparison.wallet_total_return_pct >= 0 ? TOKENS.current : TOKENS.bad} />
                   <StatCard
                     label="Income ($10/trade)"
                     value={summary.wallet_comparison.wallet_total_hypothetical_income_usd != null ? `${summary.wallet_comparison.wallet_total_hypothetical_income_usd >= 0 ? "+" : "-"}$${Math.abs(summary.wallet_comparison.wallet_total_hypothetical_income_usd).toFixed(2)}` : "—"}
@@ -251,7 +251,7 @@ export function PaperTradingView() {
               <SectionLabel>By source wallet</SectionLabel>
               <div style={{ border: `1px solid ${TOKENS.hair}`, borderRadius: 6, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "160px 90px 90px 90px 90px 1fr", padding: "8px 14px", background: TOKENS.panel2, fontFamily: mono, fontSize: 10, color: TOKENS.dim, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  <span>wallet</span><span>completed</span><span>win rate</span><span>total return</span><span>income ($10)</span><span style={{ textAlign: "right" }}>income ($5)</span>
+                  <span>wallet</span><span>completed</span><span>win rate</span><span>avg return/trade</span><span>income ($10)</span><span style={{ textAlign: "right" }}>income ($5)</span>
                 </div>
                 {summary.by_wallet.map((w) => (
                   <div key={w.address} style={{ display: "grid", gridTemplateColumns: "160px 90px 90px 90px 90px 1fr", padding: "9px 14px", borderTop: `1px solid ${TOKENS.hair}`, fontFamily: sans, fontSize: 12 }}>

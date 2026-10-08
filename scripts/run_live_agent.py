@@ -62,8 +62,9 @@ from scripts.run_watchlist_agent import find_new_candidates
 # naked-short margin ($100-300+/contract against $5-25 premium, confirmed
 # via real testnet orders) used to rule BTC/ETH sells out entirely, but
 # that was a blunt per-asset carve-out standing in for the real concern:
-# margin eating too much of the account. MAX_MARGIN_UTILIZATION_FRACTION
-# below replaces it with the actual constraint (see conversation) --
+# margin eating too much of the account. The per-config
+# max_margin_utilization_fraction below replaces it with the actual
+# constraint (see conversation) --
 # every order, any asset/side, is pre-checked against it, so BTC/ETH
 # sells are allowed through but capped by cost rather than excluded by
 # asset.
@@ -102,31 +103,36 @@ FAST_MAX_DAYS_TO_EXPIRY = 7
 # would have hit the old UNIQUE(source_event_id) constraint and been
 # silently swallowed by `except INTEGRITY_ERRORS: pass`, leaving a real
 # exchange position with no DB record at all.
+# Standing portfolio-level cap, not a per-tick one: total margin currently
+# committed across every real open position on a subaccount must never
+# exceed this fraction of that subaccount's own total value
+# (collaterals_initial_margin), checked fresh before every single order
+# via a margin simulation (see _margin_utilization_after and
+# conversation -- placing real orders to probe margin risks them
+# actually filling on testnet's thin, one-sided books, which happened
+# and left stray positions needing manual cleanup; simulate_margin()
+# never touches the real order book). Per-config, not a single constant
+# -- prime/alt run at 0.5 (comfortable headroom on their larger
+# balances), fast runs tighter at 0.3 specifically because its $100
+# balance makes liquidation a real concern in a way the larger accounts
+# don't have (see conversation).
+PRIME_MAX_MARGIN_UTILIZATION_FRACTION = 0.5
+FAST_MAX_MARGIN_UTILIZATION_FRACTION = 0.3
+
 SUBACCOUNT_CONFIGS = [
     cfg for cfg in [
-        {"name": "prime", "subaccount_id": DERIVE_SUBACCOUNT_ID, "assets": {"BTC", "ETH"}, "max_days_to_expiry": None},
-        {"name": "alt", "subaccount_id": DERIVE_SUBACCOUNT_ID_SOL, "assets": {"SOL"}, "max_days_to_expiry": None},
+        {"name": "prime", "subaccount_id": DERIVE_SUBACCOUNT_ID, "assets": {"BTC", "ETH"}, "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION},
+        {"name": "alt", "subaccount_id": DERIVE_SUBACCOUNT_ID_SOL, "assets": {"SOL"}, "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION},
         # Prime-universe subaccount (see conversation) -- BTC/ETH only,
         # same restriction as the main prime config. A SOL candidate
         # would just fail with "not in portfolio's risk universe" against
         # it, same as it would against prime -- scoping the asset set
         # correctly here avoids that noise rather than relying on
         # place_order()'s try/except to paper over it.
-        {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY},
+        {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY, "max_margin_utilization_fraction": FAST_MAX_MARGIN_UTILIZATION_FRACTION},
     ]
     if cfg["subaccount_id"] is not None
 ]
-
-# Standing portfolio-level cap, not a per-tick one: total margin currently
-# committed across every real open position must never exceed this
-# fraction of total account value (collaterals_initial_margin), checked
-# fresh before every single order via a margin simulation (see
-# _margin_utilization_after and conversation -- placing real orders to
-# probe margin risks them actually filling on testnet's thin, one-sided
-# books, which happened and left stray positions needing manual cleanup;
-# simulate_margin() never touches the real order book). 0.5 at the
-# account's current ~$100k value means ~$50k of margin in use, max.
-MAX_MARGIN_UTILIZATION_FRACTION = 0.5
 
 # Premium must clear this multiple of the estimated fee before a real
 # order gets placed -- see conversation: three real orders this session
@@ -188,10 +194,10 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, 
     """What fraction of total account value (collaterals_initial_margin)
     would be committed as margin if this candidate were added on top of
     every real position currently open, per simulate_margin(). Checked
-    fresh before every order (not just once per tick) against
-    MAX_MARGIN_UTILIZATION_FRACTION -- the standing portfolio-level cap
-    that replaced the old SOL-only/BTC-ETH-buy-only asset carve-out (see
-    conversation).
+    fresh before every order (not just once per tick) against the
+    calling config's own max_margin_utilization_fraction -- the standing
+    portfolio-level cap that replaced the old SOL-only/BTC-ETH-buy-only
+    asset carve-out (see conversation).
 
     asset picks the right simulate_margin() mode: "SM" (no market) for
     BTC/ETH, which live in the Prime universe this endpoint defaults to --
@@ -233,10 +239,10 @@ def run_live_tick(conn):
     unfiltered, fast adds its own short-expiry filter on top and can run
     the same candidate alongside them), sized to clear a real fee
     multiple rather than always trading at instrument minimum (see
-    _size_for_fee_coverage), checked against the standing portfolio
-    margin cap before every order (see
-    _margin_utilization_after/MAX_MARGIN_UTILIZATION_FRACTION, evaluated
-    per subaccount), and stops placing new orders on a given subaccount
+    _size_for_fee_coverage), checked against that subaccount's own
+    standing margin cap before every order (see
+    _margin_utilization_after and each config's
+    max_margin_utilization_fraction), and stops placing new orders on a given subaccount
     partway through a tick if its buying power has dropped too far within
     just this tick (see MIN_BUYING_POWER_FRACTION, a separate,
     complementary guard, also per subaccount). Returns (placed, skipped_weak_edge,
@@ -361,8 +367,8 @@ def run_live_tick(conn):
                 print(f"{c['instrument']} margin simulation failed, skipping: {e}")
                 skipped_untradeable += 1
                 continue
-            if utilization > MAX_MARGIN_UTILIZATION_FRACTION:
-                print(f"{c['instrument']} skipped on {config['name']} -- would push margin utilization to {utilization:.1%}, over the {MAX_MARGIN_UTILIZATION_FRACTION:.0%} cap")
+            if utilization > config["max_margin_utilization_fraction"]:
+                print(f"{c['instrument']} skipped on {config['name']} -- would push margin utilization to {utilization:.1%}, over the {config['max_margin_utilization_fraction']:.0%} cap")
                 skipped_margin_cap += 1
                 continue
 

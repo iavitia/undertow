@@ -38,5 +38,6 @@ jobs:
           DERIVE_WALLET: ${{ secrets.DERIVE_WALLET }}
           DERIVE_SESSION_KEY: ${{ secrets.DERIVE_SESSION_KEY }}
           DERIVE_SUBACCOUNT_ID: ${{ secrets.DERIVE_SUBACCOUNT_ID }}
+          DERIVE_SUBACCOUNT_ID_SOL: ${{ secrets.DERIVE_SUBACCOUNT_ID_SOL }}
           DERIVE_ETH_CHAIN: ${{ secrets.DERIVE_ETH_CHAIN }}
           EXECUTION_ENABLED: ${{ secrets.EXECUTION_ENABLED }}

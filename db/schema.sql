@@ -565,7 +565,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_ts ON agent_runs (run_ts);
 CREATE TABLE IF NOT EXISTS paper_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_wallet_address TEXT NOT NULL,
-    source_event_id INTEGER NOT NULL REFERENCES options_events(id) UNIQUE,
+    source_event_id INTEGER NOT NULL REFERENCES options_events(id),
     instrument TEXT NOT NULL,
     asset TEXT NOT NULL,
     option_type TEXT NOT NULL,
@@ -672,7 +672,19 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     -- placing it (see conversation -- there is no margin-preview
     -- endpoint, only post-hoc account state). Always NULL for
     -- mode='simulated' rows, which have no real margin concept.
-    margin_required_usd REAL
+    margin_required_usd REAL,
+    -- 0 = simulated/no real subaccount -- the permanent sentinel for
+    -- mode='simulated' rows (which have no real account concept at all).
+    -- Real values for mode='testnet_order' rows are the actual Derive
+    -- subaccount_id the order was placed on. Part of the UNIQUE pair
+    -- below (not source_event_id alone, as this column used to be) so
+    -- the same candidate can get a real row on more than one subaccount
+    -- -- see conversation: V3's Prime/Alt universe split already needs
+    -- this (BTC/ETH and SOL are financially separate subaccounts), and
+    -- a smaller, short-expiry-only "Fast" subaccount runs the same
+    -- signal in parallel with the others, not instead of them.
+    subaccount_id INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (source_event_id, subaccount_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trades_wallet ON paper_trades (source_wallet_address);
 CREATE INDEX IF NOT EXISTS idx_paper_trades_open ON paper_trades (fill_status) WHERE fill_status = 'open';

@@ -330,15 +330,15 @@ def run_live_tick(conn):
                     (source_wallet_address, source_event_id, instrument, asset, option_type, strike, expiry,
                      side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
                      margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
-                     edge_bucket_median_return_pct, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
+                     edge_bucket_median_return_pct, created_at, subaccount_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (wallet, c["id"], c["instrument"], c["asset"], c["option_type"], c["strike"], c["expiry"],
                  c["side"], c["price"], float(order["limit_price"]), now_ms, order["order_id"],
                  margin,
                  edge["n"] if edge else None, edge["win_rate"] if edge else None,
                  edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
-                 now_ms),
+                 now_ms, subaccount_id),
             )
             placed += 1
             print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}), margin=${margin}")

@@ -152,6 +152,77 @@ MAX_SIZE_MULTIPLE = 20
 # independent of and in addition to per-trade sizing.
 MIN_BUYING_POWER_FRACTION = 0.5
 
+# Loss-limiting for real naked shorts -- see conversation. The old live
+# stop-loss engine (config.STOP_MULTIPLE = 1.10, a 10% loss trigger) only
+# ever protected PAPER trades via a 15-minute poll, and was retired after
+# a real overshoot (entry $2.80 -> exit $28.20, a 10x move caught a full
+# tick late -- the poll simply couldn't keep up). This uses Derive's own
+# native, exchange-side trigger orders instead (confirmed live this
+# session: works on an OPTIONS instrument, not just perps -- Derive's own
+# matching engine fires it, no polling on our end at all). 1.5x (a 50%
+# loss of the premium collected) was chosen deliberately looser than the
+# old 1.10x: the historical backtest (scripts/analyze_stop_sensitivity.py)
+# finds tighter always "wins" on raw dollars with no interior peak, but
+# that backtest prices off bare intrinsic value with zero IV modeling --
+# real IV whipsaw is exactly what destroyed the old tight threshold in
+# production, and a native trigger fixes the *catching-it-late* problem,
+# not the *whipsaw* problem. 1.5x gives real daily crypto volatility room
+# to breathe without chasing a backtest number that was never measuring
+# the risk that actually matters here.
+STOP_LOSS_MULTIPLE = 1.5
+# The triggered order's own limit price, as a further multiple above the
+# trigger -- once fired, a trigger order still has to clear the book like
+# any limit order, and pricing it exactly at the trigger risks it failing
+# to fill if the market gaps past that level before matching. Still
+# bounds worst-case realized loss well under "no stop at all" (87.5% of
+# premium vs. the no-stop floor's 100%), while generous enough to
+# reliably fill near the intended trigger.
+STOP_LOSS_LIMIT_BUFFER = 0.25
+# Derive-confirmed live bounds on a trigger order's signature_expiry_sec
+# (a plain order's usual 10-minute window gets rejected outright for one)
+# -- a trigger order can sit dormant for a while before firing, so its
+# signature has to outlive that.
+MIN_TRIGGER_SIGNATURE_WINDOW_SEC = 51877
+MAX_TRIGGER_SIGNATURE_WINDOW_SEC = 7776000
+
+
+def _attach_stop_loss(instrument_name, subaccount_id, entry_price, amount, expiry_sec, now_sec):
+    """Places the companion exchange-side stoploss trigger order for a
+    just-opened real naked short -- see STOP_LOSS_MULTIPLE's comment.
+    reduce_only=True so a stop that ever fires after the position's
+    already closed some other way safely no-ops instead of opening a new
+    long. Returns the stop order's id, or None if the position expires
+    too soon to even get a valid trigger signature window (see
+    MIN_TRIGGER_SIGNATURE_WINDOW_SEC) -- logged either way, never silently
+    dropped, since an entry placed without its stop is a real gap, not a
+    routine skip."""
+    window = min(expiry_sec, now_sec + MAX_TRIGGER_SIGNATURE_WINDOW_SEC) - now_sec
+    if window < MIN_TRIGGER_SIGNATURE_WINDOW_SEC:
+        print(f"  {instrument_name} expires in {window / 3600:.1f}h -- too soon for a trigger order's minimum signature window, left UNPROTECTED")
+        return None
+
+    trigger_price = STOP_LOSS_MULTIPLE * entry_price
+    stop_limit_price = trigger_price * (1 + STOP_LOSS_LIMIT_BUFFER)
+    try:
+        stop_result = place_order(
+            instrument_name=instrument_name,
+            direction="buy",
+            amount=amount,
+            limit_price=stop_limit_price,
+            subaccount_id=subaccount_id,
+            reduce_only=True,
+            trigger_type="stoploss",
+            trigger_price=trigger_price,
+            trigger_price_type="mark",
+            signature_expiry_sec=now_sec + window,
+        )
+        stop_order_id = stop_result["order"]["order_id"]
+        print(f"  attached stop-loss {stop_order_id} for {instrument_name} -- triggers at mark>=${trigger_price:.2f} ({STOP_LOSS_MULTIPLE}x entry)")
+        return stop_order_id
+    except Exception as e:
+        print(f"  WARNING: stop-loss attach FAILED for {instrument_name} -- position is UNPROTECTED: {e}")
+        return None
+
 
 def _size_for_fee_coverage(instrument, limit_price, index_price):
     """Finds the smallest order size (respecting amount_step, floored at
@@ -415,6 +486,19 @@ def run_live_tick(conn):
                 continue
 
             order = order_result["order"]
+            entry_price = float(order["limit_price"])
+
+            stop_order_id = None
+            if c["side"] == "sell":
+                stop_order_id = _attach_stop_loss(
+                    instrument_name=c["instrument"],
+                    subaccount_id=subaccount_id,
+                    entry_price=entry_price,
+                    amount=amount,
+                    expiry_sec=int(c["expiry"]),
+                    now_sec=int(now_ms / 1000),
+                )
+
             state = get_account_state(subaccount_id)
             current_states[subaccount_id] = state
             margin = _margin_for_instrument(state, c["instrument"])
@@ -435,14 +519,15 @@ def run_live_tick(conn):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (wallet, c["id"], c["instrument"], c["asset"], c["option_type"], c["strike"], c["expiry"],
-                     c["side"], c["price"], float(order["limit_price"]), now_ms, order["order_id"],
+                     c["side"], c["price"], entry_price, now_ms, order["order_id"],
                      margin,
                      edge["n"] if edge else None, edge["win_rate"] if edge else None,
                      edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
                      now_ms, subaccount_id),
                 )
                 placed += 1
-                print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}")
+                stop_note = f", stop-loss {stop_order_id}" if stop_order_id else (", UNPROTECTED (no stop)" if c["side"] == "sell" else "")
+                print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}{stop_note}")
             except INTEGRITY_ERRORS:
                 pass
 

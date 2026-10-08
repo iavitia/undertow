@@ -234,15 +234,42 @@ def get_ticker(instrument_name):
     }
 
 
-def place_order(instrument_name, direction, amount, limit_price, subaccount_id, max_fee=Decimal("1000")):
-    """Places a real (testnet) limit order. direction is 'buy' or 'sell' --
-    'sell' on an instrument with no existing position is a naked short
-    ('Sell to Open' in the UI). Builds and signs a TradeModuleData action
-    using derive-py's own EIP-712 classes, with this file's confirmed
+def place_order(
+    instrument_name, direction, amount, limit_price, subaccount_id, max_fee=Decimal("1000"),
+    reduce_only=False, trigger_type=None, trigger_price=None, trigger_price_type=None,
+    signature_expiry_sec=None,
+):
+    """Places a real (testnet) order. direction is 'buy' or 'sell' -- 'sell'
+    on an instrument with no existing position is a naked short ('Sell to
+    Open' in the UI). Builds and signs a TradeModuleData action using
+    derive-py's own EIP-712 classes, with this file's confirmed
     DOMAIN_SEPARATOR/TRADE_MODULE_ADDRESS -- not derive-py's own
     Chain.SEPOLIA defaults, which are for the other environment (see
     module docstring). Amount/limit_price are quantized to the
-    instrument's own step sizes, same as derive-py's OrderOperations.create."""
+    instrument's own step sizes, same as derive-py's OrderOperations.create.
+
+    trigger_type/trigger_price/trigger_price_type turn this into a native,
+    exchange-side conditional order (confirmed live this session on an
+    OPTIONS instrument, not just perps -- Derive's own matching engine
+    holds it "untriggered" and fires it itself once trigger_price_type
+    ('mark' or 'index') crosses trigger_price, no polling on our end
+    required). trigger_type is 'stoploss' or 'takeprofit'; trigger_price is
+    a plain number, quantized to tick_size same as limit_price.
+
+    signature_expiry_sec defaults to the plain-order 10-minute window, but
+    a trigger order needs a much longer one since it can sit dormant
+    before firing -- confirmed live, Derive rejects anything under ~14.4h
+    out for a trigger order ('Order signature expiry must be between 51877
+    and 7776000 sec from now'). Callers placing a trigger order must pass
+    an explicit value in that range; this function doesn't guess one since
+    the right ceiling depends on the position's own expiry, which this
+    function doesn't know.
+
+    reduce_only matters specifically for a stop-loss attached to an
+    existing position: without it, a stop that fires after the position
+    has already been closed some other way (e.g. a manual close) would
+    open a new position in the opposite direction instead of safely
+    no-opping."""
     _assert_testnet()
     instrument = get_instrument(instrument_name)
 
@@ -253,7 +280,8 @@ def place_order(instrument_name, direction, amount, limit_price, subaccount_id, 
 
     signer_address = Account.from_key(DERIVE_SESSION_KEY).address
     nonce = int(time.time_ns())
-    signature_expiry_sec = int(time.time()) + 600  # must be >5 min out, per Derive docs
+    if signature_expiry_sec is None:
+        signature_expiry_sec = int(time.time()) + 600  # must be >5 min out, per Derive docs
 
     module_data = TradeModuleData(
         asset_address=instrument["base_asset_address"],
@@ -295,8 +323,22 @@ def place_order(instrument_name, direction, amount, limit_price, subaccount_id, 
         "label": "",
         "mmp": False,
         "order_type": "limit",
-        "reduce_only": False,
+        "reduce_only": reduce_only,
         "reject_timestamp": INT64_MAX,
         "time_in_force": "gtc",
     }
+    if trigger_type is not None:
+        order_params["trigger_type"] = trigger_type
+        order_params["trigger_price"] = str(Decimal(str(trigger_price)).quantize(tick_size))
+        order_params["trigger_price_type"] = trigger_price_type
     return _private_post("/private/order", order_params)
+
+
+def cancel_trigger_order(order_id, subaccount_id):
+    """Untriggered conditional orders live in a separate queue from normal
+    resting orders -- confirmed live this session that the plain
+    /private/cancel (order_id + subaccount_id + instrument_name) returns
+    "Order does not exist" for one; this dedicated endpoint is what
+    actually works."""
+    _assert_testnet()
+    return _private_post("/private/cancel_trigger_order", {"order_id": order_id, "subaccount_id": subaccount_id})

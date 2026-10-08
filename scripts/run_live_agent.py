@@ -106,7 +106,13 @@ SUBACCOUNT_CONFIGS = [
     cfg for cfg in [
         {"name": "prime", "subaccount_id": DERIVE_SUBACCOUNT_ID, "assets": {"BTC", "ETH"}, "max_days_to_expiry": None},
         {"name": "alt", "subaccount_id": DERIVE_SUBACCOUNT_ID_SOL, "assets": {"SOL"}, "max_days_to_expiry": None},
-        {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH", "SOL"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY},
+        # Prime-universe subaccount (see conversation) -- BTC/ETH only,
+        # same restriction as the main prime config. A SOL candidate
+        # would just fail with "not in portfolio's risk universe" against
+        # it, same as it would against prime -- scoping the asset set
+        # correctly here avoids that noise rather than relying on
+        # place_order()'s try/except to paper over it.
+        {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY},
     ]
     if cfg["subaccount_id"] is not None
 ]

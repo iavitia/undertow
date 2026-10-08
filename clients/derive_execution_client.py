@@ -109,7 +109,7 @@ def get_account_state(subaccount_id):
     return _private_post("/private/get_subaccount", {"subaccount_id": subaccount_id})
 
 
-def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM"):
+def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM", market=None):
     """Public, no auth needed -- the real preview/what-if endpoint
     (public/order_debug, despite its name, only validates signature
     construction, not margin; this is the actual one). Confirmed this
@@ -127,18 +127,29 @@ def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM"
 
     simulated_positions: [{"instrument_name": ..., "amount": "<signed str, negative=short>"}, ...]
     simulated_collaterals: [{"asset_name": "USDC", "amount": "<str>"}, ...]
-    margin_type: "SM" (Standard Margin) -- confirmed this session to match
-    this account's own real margin_type (get_account_state()['margin_type']).
+    margin_type: "SM" (Standard Margin) or "PM2" (Portfolio Margin).
+    market: required for non-Prime-universe instruments -- confirmed live
+    this session that "SM" against this endpoint only resolves the Prime
+    universe (BTC/ETH); simulating a SOL (Alt-universe) position needs
+    margin_type="PM2", market="SOL" even though the real SOL subaccount
+    itself is Standard Margin, or it errors "Instrument ... is not in the
+    portfolio's risk universe". Confirmed PM2 runs slightly *higher* than
+    SM for an unhedged position (this session's SM-vs-PM2 comparison), so
+    using it as SOL's stand-in for a margin-cap safety check is
+    conservative, not optimistic.
 
     Returns the raw result dict (pre/post_initial_margin, pre/post_maintenance_margin,
     is_valid_trade) -- same shape as the real account-state margin fields."""
+    body = {
+        "margin_type": margin_type,
+        "simulated_positions": simulated_positions,
+        "simulated_collaterals": simulated_collaterals,
+    }
+    if market is not None:
+        body["market"] = market
     resp = requests.post(
         f"{EXECUTION_BASE_URL}/public/get_margin",
-        json={
-            "margin_type": margin_type,
-            "simulated_positions": simulated_positions,
-            "simulated_collaterals": simulated_collaterals,
-        },
+        json=body,
         timeout=15,
     )
     resp.raise_for_status()

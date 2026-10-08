@@ -18,6 +18,12 @@ DERIBIT_BASE_URL = "https://www.deribit.com/api/v2"
 DERIVE_WALLET = os.environ.get("DERIVE_WALLET")
 DERIVE_SESSION_KEY = os.environ.get("DERIVE_SESSION_KEY")
 DERIVE_SUBACCOUNT_ID = int(os.environ["DERIVE_SUBACCOUNT_ID"]) if os.environ.get("DERIVE_SUBACCOUNT_ID") else None
+# V3 split BTC/ETH and SOL into separate risk universes (Prime vs Alt --
+# see conversation) that can't share a subaccount, so SOL gets its own
+# with its own, financially-independent margin pool. DERIVE_SUBACCOUNT_ID
+# above stays the Prime (BTC/ETH) one for backward compatibility with
+# every other script that only ever traded those two.
+DERIVE_SUBACCOUNT_ID_SOL = int(os.environ["DERIVE_SUBACCOUNT_ID_SOL"]) if os.environ.get("DERIVE_SUBACCOUNT_ID_SOL") else None
 # Must stay "SEPOLIA" for the lifetime of this project's paper-trading/testnet
 # phase -- clients/derive_execution_client.py refuses to run against
 # anything else. Never set this to a mainnet chain casually.

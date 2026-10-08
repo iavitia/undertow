@@ -54,7 +54,7 @@ from clients.derive_execution_client import (
     place_order,
     simulate_margin,
 )
-from config import DERIVE_SUBACCOUNT_ID, EXECUTION_ENABLED
+from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_SOL, EXECUTION_ENABLED
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.run_watchlist_agent import find_new_candidates
 
@@ -68,6 +68,17 @@ from scripts.run_watchlist_agent import find_new_candidates
 # sells are allowed through but capped by cost rather than excluded by
 # asset.
 LIVE_ASSETS = ("SOL", "BTC", "ETH")
+
+# V3's risk universes split BTC/ETH (Prime) from SOL (Alt) -- they can't
+# share a subaccount (see conversation), so each asset routes to its own,
+# financially-independent subaccount/margin pool. Every per-subaccount
+# check below (margin cap, buying-power floor) runs separately per
+# subaccount_id, not pooled across both.
+SUBACCOUNT_FOR_ASSET = {
+    "BTC": DERIVE_SUBACCOUNT_ID,
+    "ETH": DERIVE_SUBACCOUNT_ID,
+    "SOL": DERIVE_SUBACCOUNT_ID_SOL,
+}
 
 # Standing portfolio-level cap, not a per-tick one: total margin currently
 # committed across every real open position must never exceed this
@@ -136,14 +147,22 @@ def _margin_for_instrument(state, instrument_name):
     return None
 
 
-def _margin_utilization_after(state, new_instrument_name, new_side, new_amount):
+def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, asset):
     """What fraction of total account value (collaterals_initial_margin)
     would be committed as margin if this candidate were added on top of
     every real position currently open, per simulate_margin(). Checked
     fresh before every order (not just once per tick) against
     MAX_MARGIN_UTILIZATION_FRACTION -- the standing portfolio-level cap
     that replaced the old SOL-only/BTC-ETH-buy-only asset carve-out (see
-    conversation)."""
+    conversation).
+
+    asset picks the right simulate_margin() mode: "SM" (no market) for
+    BTC/ETH, which live in the Prime universe this endpoint defaults to --
+    "PM2"+market="SOL" for SOL, confirmed the only way this public
+    endpoint can price an Alt-universe instrument at all, even though the
+    real SOL subaccount is itself Standard Margin (see
+    simulate_margin's docstring for why that's a safe, conservative
+    stand-in rather than an exact match)."""
     simulated_positions = {}
     for p in state.get("positions", []):
         amt = float(p.get("amount") or 0)
@@ -156,11 +175,14 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount):
     if total_value <= 0:
         return 1.0  # no collateral at all -- treat as fully committed, refuse
 
+    margin_type, market = ("PM2", "SOL") if asset == "SOL" else ("SM", None)
     result = simulate_margin(
         simulated_positions=[{"instrument_name": k, "amount": str(v)} for k, v in simulated_positions.items()],
         simulated_collaterals=[
             {"asset_name": c["asset_name"], "amount": c["amount"]} for c in state.get("collaterals", [])
         ],
+        margin_type=margin_type,
+        market=market,
     )
     margin_used = total_value - float(result["post_initial_margin"])
     return margin_used / total_value
@@ -170,14 +192,17 @@ def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
     entry, tries to place a real testnet order instead of recording a
-    simulated fill. All three assets, both sides (see LIVE_ASSETS), sized
-    to clear a real fee multiple rather than always trading at instrument
-    minimum (see _size_for_fee_coverage), checked against the standing
-    portfolio margin cap before every order (see
-    _margin_utilization_after/MAX_MARGIN_UTILIZATION_FRACTION), and stops
-    placing new orders partway through a tick if buying power has dropped
-    too far within just this tick (see MIN_BUYING_POWER_FRACTION, a
-    separate, complementary guard). Returns (placed, skipped_weak_edge,
+    simulated fill. All three assets, both sides (see LIVE_ASSETS), routed
+    to the right subaccount per asset (see SUBACCOUNT_FOR_ASSET -- BTC/ETH
+    and SOL are financially separate subaccounts under V3), sized to clear
+    a real fee multiple rather than always trading at instrument minimum
+    (see _size_for_fee_coverage), checked against the standing portfolio
+    margin cap before every order (see
+    _margin_utilization_after/MAX_MARGIN_UTILIZATION_FRACTION, evaluated
+    per subaccount), and stops placing new orders on a given subaccount
+    partway through a tick if its buying power has dropped too far within
+    just this tick (see MIN_BUYING_POWER_FRACTION, a separate,
+    complementary guard, also per subaccount). Returns (placed, skipped_weak_edge,
     skipped_wrong_asset, skipped_uneconomical, skipped_untradeable,
     skipped_margin_cap)."""
     now_ms = int(time.time() * 1000)
@@ -193,21 +218,22 @@ def run_live_tick(conn):
     # (collaterals_initial_margin + positions_initial_margin, the latter
     # negative), i.e. remaining margin capacity after currently-open
     # positions. Shrinks as more real orders get placed, which is exactly
-    # what this floor is meant to track.
-    starting_state = get_account_state(DERIVE_SUBACCOUNT_ID)
-    starting_buying_power = float(starting_state.get("initial_margin") or 0)
-    buying_power_floor = starting_buying_power * MIN_BUYING_POWER_FRACTION
-    low_buying_power = False
-    # Kept current after every real order placed this tick, so each
-    # candidate's margin-cap check (_margin_utilization_after) reflects
-    # every order that's already gone out, not just the tick's starting
-    # state.
-    current_state = starting_state
+    # what this floor is meant to track. Tracked per subaccount_id (not
+    # pooled) since BTC/ETH and SOL now sit in separate, independently
+    # margined subaccounts -- see SUBACCOUNT_FOR_ASSET.
+    subaccount_ids = set(SUBACCOUNT_FOR_ASSET.values())
+    current_states = {sid: get_account_state(sid) for sid in subaccount_ids}
+    buying_power_floors = {
+        sid: float(state.get("initial_margin") or 0) * MIN_BUYING_POWER_FRACTION
+        for sid, state in current_states.items()
+    }
+    low_buying_power = {sid: False for sid in subaccount_ids}
 
     for wallet, c, status, edge in find_new_candidates(conn, cursor_column="live_last_checked_ts"):
         if c["asset"] not in LIVE_ASSETS:
             skipped_wrong_asset += 1
             continue
+        subaccount_id = SUBACCOUNT_FOR_ASSET[c["asset"]]
 
         if status == "skipped_weak_edge":
             try:
@@ -231,8 +257,8 @@ def run_live_tick(conn):
             continue
 
         # status == "pending_entry": try to mirror it for real.
-        if low_buying_power:
-            print(f"{c['instrument']} skipped -- buying power already below the tick's floor")
+        if low_buying_power[subaccount_id]:
+            print(f"{c['instrument']} skipped -- subaccount {subaccount_id} buying power already below the tick's floor")
             skipped_untradeable += 1
             continue
 
@@ -264,7 +290,7 @@ def run_live_tick(conn):
             continue
 
         try:
-            utilization = _margin_utilization_after(current_state, c["instrument"], c["side"], amount)
+            utilization = _margin_utilization_after(current_states[subaccount_id], c["instrument"], c["side"], amount, c["asset"])
         except Exception as e:
             print(f"{c['instrument']} margin simulation failed, skipping: {e}")
             skipped_untradeable += 1
@@ -280,7 +306,7 @@ def run_live_tick(conn):
                 direction=c["side"],
                 amount=amount,
                 limit_price=mark_price,
-                subaccount_id=DERIVE_SUBACCOUNT_ID,
+                subaccount_id=subaccount_id,
             )
         except Exception as e:
             print(f"order placement failed for {c['instrument']}, skipping: {e}")
@@ -288,14 +314,14 @@ def run_live_tick(conn):
             continue
 
         order = order_result["order"]
-        state = get_account_state(DERIVE_SUBACCOUNT_ID)
-        current_state = state
+        state = get_account_state(subaccount_id)
+        current_states[subaccount_id] = state
         margin = _margin_for_instrument(state, c["instrument"])
 
         current_buying_power = float(state.get("initial_margin") or 0)
-        if current_buying_power < buying_power_floor:
-            low_buying_power = True
-            print(f"buying power ${current_buying_power:.2f} fell below the tick's floor ${buying_power_floor:.2f} -- no more real orders this tick")
+        if current_buying_power < buying_power_floors[subaccount_id]:
+            low_buying_power[subaccount_id] = True
+            print(f"subaccount {subaccount_id} buying power ${current_buying_power:.2f} fell below the tick's floor ${buying_power_floors[subaccount_id]:.2f} -- no more real orders on it this tick")
 
         try:
             conn.execute(

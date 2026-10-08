@@ -54,7 +54,7 @@ from clients.derive_execution_client import (
     place_order,
     simulate_margin,
 )
-from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_SOL, EXECUTION_ENABLED
+from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_FAST, DERIVE_SUBACCOUNT_ID_SOL, EXECUTION_ENABLED
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.run_watchlist_agent import find_new_candidates
 
@@ -69,16 +69,47 @@ from scripts.run_watchlist_agent import find_new_candidates
 # asset.
 LIVE_ASSETS = ("SOL", "BTC", "ETH")
 
+# How many days out a candidate's expiry can be and still qualify for the
+# "fast" subaccount below -- see conversation: a small account needs to
+# turn capital over quickly and prioritize whatever's most time-critical,
+# not sit tied up in a handful of long-dated positions.
+FAST_MAX_DAYS_TO_EXPIRY = 7
+
 # V3's risk universes split BTC/ETH (Prime) from SOL (Alt) -- they can't
 # share a subaccount (see conversation), so each asset routes to its own,
 # financially-independent subaccount/margin pool. Every per-subaccount
 # check below (margin cap, buying-power floor) runs separately per
 # subaccount_id, not pooled across both.
-SUBACCOUNT_FOR_ASSET = {
-    "BTC": DERIVE_SUBACCOUNT_ID,
-    "ETH": DERIVE_SUBACCOUNT_ID,
-    "SOL": DERIVE_SUBACCOUNT_ID_SOL,
-}
+#
+# "fast" is a third, deliberately small-capital subaccount that runs the
+# *same* signal as prime/alt in parallel, not instead of them -- added
+# specifically to observe real margin/fee/scheduling-delay economics
+# under tight capital (see conversation), which prime/alt's larger
+# balances don't meaningfully stress. Filtered to short-expiry
+# candidates only (FAST_MAX_DAYS_TO_EXPIRY) and processed soonest-expiry
+# first, so its tiny margin budget goes to whatever's most time-critical
+# instead of whatever happened to arrive first in find_new_candidates()'s
+# order. Only runs once DERIVE_SUBACCOUNT_ID_FAST is actually set --
+# until then this config is silently absent, same as any other unset
+# subaccount.
+#
+# Needing the SAME candidate to produce a real order on more than one of
+# these subaccounts (e.g. a short-dated BTC candidate going to both prime
+# and fast) is exactly what paper_trades.subaccount_id/the composite
+# UNIQUE(source_event_id, subaccount_id) constraint exists for -- see
+# conversation and db/schema.sql's comment on that column. Before that
+# migration, a second real order for a candidate prime/alt already took
+# would have hit the old UNIQUE(source_event_id) constraint and been
+# silently swallowed by `except INTEGRITY_ERRORS: pass`, leaving a real
+# exchange position with no DB record at all.
+SUBACCOUNT_CONFIGS = [
+    cfg for cfg in [
+        {"name": "prime", "subaccount_id": DERIVE_SUBACCOUNT_ID, "assets": {"BTC", "ETH"}, "max_days_to_expiry": None},
+        {"name": "alt", "subaccount_id": DERIVE_SUBACCOUNT_ID_SOL, "assets": {"SOL"}, "max_days_to_expiry": None},
+        {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH", "SOL"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY},
+    ]
+    if cfg["subaccount_id"] is not None
+]
 
 # Standing portfolio-level cap, not a per-tick one: total margin currently
 # committed across every real open position must never exceed this
@@ -191,12 +222,12 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, 
 def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
-    entry, tries to place a real testnet order instead of recording a
-    simulated fill. All three assets, both sides (see LIVE_ASSETS), routed
-    to the right subaccount per asset (see SUBACCOUNT_FOR_ASSET -- BTC/ETH
-    and SOL are financially separate subaccounts under V3), sized to clear
-    a real fee multiple rather than always trading at instrument minimum
-    (see _size_for_fee_coverage), checked against the standing portfolio
+    entry, tries to place a real testnet order on every subaccount config
+    it matches (see SUBACCOUNT_CONFIGS -- prime/alt are asset-routed and
+    unfiltered, fast adds its own short-expiry filter on top and can run
+    the same candidate alongside them), sized to clear a real fee
+    multiple rather than always trading at instrument minimum (see
+    _size_for_fee_coverage), checked against the standing portfolio
     margin cap before every order (see
     _margin_utilization_after/MAX_MARGIN_UTILIZATION_FRACTION, evaluated
     per subaccount), and stops placing new orders on a given subaccount
@@ -219,9 +250,9 @@ def run_live_tick(conn):
     # negative), i.e. remaining margin capacity after currently-open
     # positions. Shrinks as more real orders get placed, which is exactly
     # what this floor is meant to track. Tracked per subaccount_id (not
-    # pooled) since BTC/ETH and SOL now sit in separate, independently
-    # margined subaccounts -- see SUBACCOUNT_FOR_ASSET.
-    subaccount_ids = set(SUBACCOUNT_FOR_ASSET.values())
+    # pooled) since every subaccount in SUBACCOUNT_CONFIGS is its own,
+    # independently margined account.
+    subaccount_ids = {cfg["subaccount_id"] for cfg in SUBACCOUNT_CONFIGS}
     current_states = {sid: get_account_state(sid) for sid in subaccount_ids}
     buying_power_floors = {
         sid: float(state.get("initial_margin") or 0) * MIN_BUYING_POWER_FRACTION
@@ -229,13 +260,23 @@ def run_live_tick(conn):
     }
     low_buying_power = {sid: False for sid in subaccount_ids}
 
+    # find_new_candidates() already fully materializes its result (and
+    # commits the watchlist cursor advance) before returning -- safe to
+    # call exactly once here and reuse the list across every subaccount
+    # config below, rather than re-querying per config (which would also
+    # be wrong: a second call would see nothing new, the cursor having
+    # already moved past everything on the first).
+    pending = []
     for wallet, c, status, edge in find_new_candidates(conn, cursor_column="live_last_checked_ts"):
         if c["asset"] not in LIVE_ASSETS:
             skipped_wrong_asset += 1
             continue
-        subaccount_id = SUBACCOUNT_FOR_ASSET[c["asset"]]
 
         if status == "skipped_weak_edge":
+            # Classification is per-candidate (the source wallet's own
+            # track record), identical regardless of which subaccount(s)
+            # would have taken it -- logged once here, not once per
+            # matching config below.
             try:
                 conn.execute(
                     """
@@ -256,94 +297,113 @@ def run_live_tick(conn):
                 pass
             continue
 
-        # status == "pending_entry": try to mirror it for real.
-        if low_buying_power[subaccount_id]:
-            print(f"{c['instrument']} skipped -- subaccount {subaccount_id} buying power already below the tick's floor")
-            skipped_untradeable += 1
-            continue
+        pending.append((wallet, c, status, edge))
 
-        try:
-            instrument = get_instrument(c["instrument"])
-        except Exception as e:
-            print(f"{c['instrument']} not tradeable on testnet, skipping: {e}")
-            skipped_untradeable += 1
-            continue
+    # status == "pending_entry" from here -- each candidate tried against
+    # every subaccount config whose asset/expiry filter it matches (see
+    # SUBACCOUNT_CONFIGS), not just one. The composite
+    # UNIQUE(source_event_id, subaccount_id) constraint (see
+    # db/schema.sql) is what makes a candidate landing a real order on
+    # more than one subaccount safe to record.
+    for config in SUBACCOUNT_CONFIGS:
+        subaccount_id = config["subaccount_id"]
+        max_days = config["max_days_to_expiry"]
+        matching = [
+            item for item in pending
+            if item[1]["asset"] in config["assets"]
+            and (max_days is None or (item[1]["expiry"] - now_ms / 1000) / 86400 <= max_days)
+        ]
+        if max_days is not None:
+            matching.sort(key=lambda item: item[1]["expiry"])  # soonest-expiry first
 
-        try:
-            ticker = get_ticker(c["instrument"])
-        except Exception as e:
-            print(f"{c['instrument']} ticker fetch failed, skipping: {e}")
-            skipped_untradeable += 1
-            continue
+        for wallet, c, status, edge in matching:
+            if low_buying_power[subaccount_id]:
+                print(f"{c['instrument']} skipped on {config['name']} -- subaccount {subaccount_id} buying power already below the tick's floor")
+                skipped_untradeable += 1
+                continue
 
-        mark_price = ticker.get("mark_price")
-        index_price = ticker.get("index_price")
-        if not mark_price or float(mark_price) <= 0 or not index_price:
-            print(f"{c['instrument']} has no live testnet price yet, skipping")
-            skipped_untradeable += 1
-            continue
+            try:
+                instrument = get_instrument(c["instrument"])
+            except Exception as e:
+                print(f"{c['instrument']} not tradeable on testnet, skipping: {e}")
+                skipped_untradeable += 1
+                continue
 
-        amount = _size_for_fee_coverage(instrument, float(mark_price), float(index_price))
-        if amount is None:
-            print(f"{c['instrument']} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
-            skipped_uneconomical += 1
-            continue
+            try:
+                ticker = get_ticker(c["instrument"])
+            except Exception as e:
+                print(f"{c['instrument']} ticker fetch failed, skipping: {e}")
+                skipped_untradeable += 1
+                continue
 
-        try:
-            utilization = _margin_utilization_after(current_states[subaccount_id], c["instrument"], c["side"], amount, c["asset"])
-        except Exception as e:
-            print(f"{c['instrument']} margin simulation failed, skipping: {e}")
-            skipped_untradeable += 1
-            continue
-        if utilization > MAX_MARGIN_UTILIZATION_FRACTION:
-            print(f"{c['instrument']} skipped -- would push margin utilization to {utilization:.1%}, over the {MAX_MARGIN_UTILIZATION_FRACTION:.0%} cap")
-            skipped_margin_cap += 1
-            continue
+            mark_price = ticker.get("mark_price")
+            index_price = ticker.get("index_price")
+            if not mark_price or float(mark_price) <= 0 or not index_price:
+                print(f"{c['instrument']} has no live testnet price yet, skipping")
+                skipped_untradeable += 1
+                continue
 
-        try:
-            order_result = place_order(
-                instrument_name=c["instrument"],
-                direction=c["side"],
-                amount=amount,
-                limit_price=mark_price,
-                subaccount_id=subaccount_id,
-            )
-        except Exception as e:
-            print(f"order placement failed for {c['instrument']}, skipping: {e}")
-            skipped_untradeable += 1
-            continue
+            amount = _size_for_fee_coverage(instrument, float(mark_price), float(index_price))
+            if amount is None:
+                print(f"{c['instrument']} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
+                skipped_uneconomical += 1
+                continue
 
-        order = order_result["order"]
-        state = get_account_state(subaccount_id)
-        current_states[subaccount_id] = state
-        margin = _margin_for_instrument(state, c["instrument"])
+            try:
+                utilization = _margin_utilization_after(current_states[subaccount_id], c["instrument"], c["side"], amount, c["asset"])
+            except Exception as e:
+                print(f"{c['instrument']} margin simulation failed, skipping: {e}")
+                skipped_untradeable += 1
+                continue
+            if utilization > MAX_MARGIN_UTILIZATION_FRACTION:
+                print(f"{c['instrument']} skipped on {config['name']} -- would push margin utilization to {utilization:.1%}, over the {MAX_MARGIN_UTILIZATION_FRACTION:.0%} cap")
+                skipped_margin_cap += 1
+                continue
 
-        current_buying_power = float(state.get("initial_margin") or 0)
-        if current_buying_power < buying_power_floors[subaccount_id]:
-            low_buying_power[subaccount_id] = True
-            print(f"subaccount {subaccount_id} buying power ${current_buying_power:.2f} fell below the tick's floor ${buying_power_floors[subaccount_id]:.2f} -- no more real orders on it this tick")
+            try:
+                order_result = place_order(
+                    instrument_name=c["instrument"],
+                    direction=c["side"],
+                    amount=amount,
+                    limit_price=mark_price,
+                    subaccount_id=subaccount_id,
+                )
+            except Exception as e:
+                print(f"order placement failed for {c['instrument']} on {config['name']}, skipping: {e}")
+                skipped_untradeable += 1
+                continue
 
-        try:
-            conn.execute(
-                """
-                INSERT INTO paper_trades
-                    (source_wallet_address, source_event_id, instrument, asset, option_type, strike, expiry,
-                     side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
-                     margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
-                     edge_bucket_median_return_pct, created_at, subaccount_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (wallet, c["id"], c["instrument"], c["asset"], c["option_type"], c["strike"], c["expiry"],
-                 c["side"], c["price"], float(order["limit_price"]), now_ms, order["order_id"],
-                 margin,
-                 edge["n"] if edge else None, edge["win_rate"] if edge else None,
-                 edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
-                 now_ms, subaccount_id),
-            )
-            placed += 1
-            print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}), margin=${margin}")
-        except INTEGRITY_ERRORS:
-            pass
+            order = order_result["order"]
+            state = get_account_state(subaccount_id)
+            current_states[subaccount_id] = state
+            margin = _margin_for_instrument(state, c["instrument"])
+
+            current_buying_power = float(state.get("initial_margin") or 0)
+            if current_buying_power < buying_power_floors[subaccount_id]:
+                low_buying_power[subaccount_id] = True
+                print(f"subaccount {subaccount_id} ({config['name']}) buying power ${current_buying_power:.2f} fell below the tick's floor ${buying_power_floors[subaccount_id]:.2f} -- no more real orders on it this tick")
+
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO paper_trades
+                        (source_wallet_address, source_event_id, instrument, asset, option_type, strike, expiry,
+                         side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
+                         margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
+                         edge_bucket_median_return_pct, created_at, subaccount_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (wallet, c["id"], c["instrument"], c["asset"], c["option_type"], c["strike"], c["expiry"],
+                     c["side"], c["price"], float(order["limit_price"]), now_ms, order["order_id"],
+                     margin,
+                     edge["n"] if edge else None, edge["win_rate"] if edge else None,
+                     edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
+                     now_ms, subaccount_id),
+                )
+                placed += 1
+                print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}")
+            except INTEGRITY_ERRORS:
+                pass
 
     conn.commit()
     return placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable, skipped_margin_cap

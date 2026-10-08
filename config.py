@@ -24,6 +24,13 @@ DERIVE_SUBACCOUNT_ID = int(os.environ["DERIVE_SUBACCOUNT_ID"]) if os.environ.get
 # above stays the Prime (BTC/ETH) one for backward compatibility with
 # every other script that only ever traded those two.
 DERIVE_SUBACCOUNT_ID_SOL = int(os.environ["DERIVE_SUBACCOUNT_ID_SOL"]) if os.environ.get("DERIVE_SUBACCOUNT_ID_SOL") else None
+# Small-capital, short-expiry-only subaccount (see conversation) --
+# follows the same signal as Prime/Alt in parallel, not instead of them,
+# specifically to observe real margin/fee/scheduling-delay economics
+# under tight capital. None until the wallet is actually created --
+# scripts/run_live_agent.py's SUBACCOUNT_CONFIGS skips it entirely while
+# unset, same pattern as the other two.
+DERIVE_SUBACCOUNT_ID_FAST = int(os.environ["DERIVE_SUBACCOUNT_ID_FAST"]) if os.environ.get("DERIVE_SUBACCOUNT_ID_FAST") else None
 # Must stay "SEPOLIA" for the lifetime of this project's paper-trading/testnet
 # phase -- clients/derive_execution_client.py refuses to run against
 # anything else. Never set this to a mainnet chain casually.

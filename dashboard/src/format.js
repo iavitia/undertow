@@ -24,6 +24,24 @@ export function fmtDateTime(ts) {
   return d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
 }
 
+// Arizona doesn't observe DST, so it's always UTC-7 (same as MST)
+// year-round -- using the IANA zone instead of a hardcoded offset so
+// this stays correct rather than silently drifting if that ever changed.
+const AZ_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Phoenix",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+export function fmtDateTimeAZ(ts) {
+  const parts = Object.fromEntries(AZ_PARTS.formatToParts(new Date(ts)).map((p) => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} MST`;
+}
+
 // Fetch window: wide enough to cover every marker that will be drawn
 // (entry, expiry, and optionally a close/roll date), capped at "now" since
 // there's no price data for the future. Previously this fetched

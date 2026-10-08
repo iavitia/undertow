@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { TOKENS, mono, sans } from "../tokens";
 import { apiGet } from "../api";
+import { fmtDateTimeAZ } from "../format";
 import { Empty, SectionLabel, StatCard } from "./Shared";
 
 function PctSign({ value }) {
@@ -56,8 +57,9 @@ function WalletOutcomeBadge({ t }) {
 function TradeRow({ t }) {
   const status = STATUS_STYLE[t.fill_status] || { label: t.fill_status, color: TOKENS.dim };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 90px 90px 90px 80px 80px 100px", padding: "9px 14px", borderTop: `1px solid ${TOKENS.hair}`, fontFamily: sans, fontSize: 12, color: TOKENS.paper, alignItems: "center" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "130px 125px 1fr 90px 90px 90px 90px 80px 80px 100px", padding: "9px 14px", borderTop: `1px solid ${TOKENS.hair}`, fontFamily: sans, fontSize: 12, color: TOKENS.paper, alignItems: "center" }}>
       <span style={{ fontFamily: mono, color: TOKENS.undertow }}>{t.alias || t.source_wallet_address.slice(0, 10)}</span>
+      <span style={{ fontFamily: mono, fontSize: 10.5, color: TOKENS.dim }}>{fmtDateTimeAZ(t.created_at)}</span>
       <span>
         {t.asset} {t.option_type.toUpperCase()} {t.strike.toLocaleString()} · exp {t.expiry_date} · entered via {t.side}
       </span>
@@ -305,8 +307,8 @@ export function PaperTradingView() {
               exact same position unprotected. Blank means their position hasn't closed or expired yet.
             </div>
             <div style={{ border: `1px solid ${TOKENS.hair}`, borderRadius: 6, overflow: "hidden" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 90px 90px 90px 80px 80px 100px", padding: "8px 14px", background: TOKENS.panel2, fontFamily: mono, fontSize: 10, color: TOKENS.dim, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                <span>wallet</span><span>position</span><span>status</span><span>entry</span><span>exit</span><span>edge</span><span>return</span><span>wallet's own</span><span style={{ textAlign: "right" }}>income ($10/trade)</span>
+              <div style={{ display: "grid", gridTemplateColumns: "130px 125px 1fr 90px 90px 90px 90px 80px 80px 100px", padding: "8px 14px", background: TOKENS.panel2, fontFamily: mono, fontSize: 10, color: TOKENS.dim, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <span>wallet</span><span>placed</span><span>position</span><span>status</span><span>entry</span><span>exit</span><span>edge</span><span>return</span><span>wallet's own</span><span style={{ textAlign: "right" }}>income ($10/trade)</span>
               </div>
               {!trades && <Empty>loading…</Empty>}
               {trades?.length === 0 && <Empty>no paper trades yet</Empty>}

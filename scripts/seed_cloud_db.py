@@ -27,6 +27,23 @@ from config import DB_PATH
 from db.cloud_conn import get_cloud_conn
 
 
+def _clean_realized_pnl(value):
+    """~18.6% of local options_events rows have realized_pnl stored as a
+    UUID-shaped TEXT value instead of a number (pre-existing, root cause
+    not yet investigated -- see scripts/build_leaderboard.py's own
+    defensive coercion, discovered earlier this session). SQLite's loose
+    typing accepted it silently; Postgres's real DOUBLE PRECISION column
+    correctly rejects it (confirmed live -- InvalidTextRepresentation).
+    Same fix as build_leaderboard.py: treat anything unparseable as
+    missing, matching how a genuinely-NULL realized_pnl already behaves."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def create_schema(cloud):
     schema_path = Path(__file__).resolve().parent.parent / "db" / "cloud_schema.sql"
     sql = schema_path.read_text()
@@ -144,7 +161,69 @@ def sync_live_wallets(local, cloud):
         )
     print(f"  wallet_edge_profile: {len(edge_rows)}")
 
+    backfill_new_wallets_history(local, cloud, addresses)
+
     cloud.commit()
+
+
+def backfill_new_wallets_history(local, cloud, addresses):
+    """For any watchlisted wallet cloud has never seen a single trade
+    for (true the moment a wallet is newly added -- this never pushed
+    wallets' own options_events before, only their ratings), push their
+    FULL local trade history over. Without this, find_new_candidates()'s
+    "first-ever-trade" check (NOT EXISTS ... prior.timestamp < oe.timestamp)
+    has nothing to compare against in cloud for that wallet and would
+    treat their next trade in any instrument as first-ever even if it's
+    really their hundredth -- see conversation. Already-known wallets are
+    skipped (cloud's ongoing ingest keeps them current); this is
+    specifically the one-time catch-up for a wallet that's brand new to
+    the watchlist.
+
+    Batched (executemany) and committed per-wallet, not row-by-row --
+    confirmed this session that one-row-at-a-time execute() over the
+    Supabase pooler took 30+ minutes for 15k rows and never got far
+    enough to even commit once (a hard timeout kill lost all of it,
+    nothing had been committed yet). executemany for one wallet's whole
+    history, then commit, bounds how much work a single interruption can
+    lose to one wallet's rows instead of the entire backfill."""
+    new_count = 0
+    row_count = 0
+    for address in addresses:
+        already_known = cloud.execute(
+            "SELECT 1 FROM options_events WHERE wallet_address = ? LIMIT 1", (address,)
+        ).fetchone()
+        if already_known is not None:
+            continue
+        new_count += 1
+        history = local.execute("SELECT * FROM options_events WHERE wallet_address = ?", (address,)).fetchall()
+        cloud.executemany(
+            """
+            INSERT INTO options_events
+                (source, asset, instrument, strike, expiry, option_type, side,
+                 size, price, notional_usd, index_price_usd, wallet_address,
+                 tx_hash, source_trade_id, timestamp,
+                 mark_price, rfq_id, tx_status, trade_fee, liquidity_role, realized_pnl, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (source, source_trade_id, wallet_address) DO NOTHING
+            """,
+            [
+                (
+                    r["source"], r["asset"], r["instrument"], r["strike"], r["expiry"], r["option_type"],
+                    r["side"], r["size"], r["price"], r["notional_usd"], r["index_price_usd"],
+                    r["wallet_address"], r["tx_hash"], r["source_trade_id"], r["timestamp"],
+                    r["mark_price"], r["rfq_id"], r["tx_status"], r["trade_fee"], r["liquidity_role"],
+                    _clean_realized_pnl(r["realized_pnl"]), r["raw_json"],
+                )
+                for r in history
+            ],
+        )
+        cloud.commit()
+        row_count += len(history)
+        print(f"  backfilled {len(history)} trades for {address} ({new_count} wallet(s) so far)")
+    if new_count:
+        print(f"  backfilled {row_count} historical trades for {new_count} newly-watchlisted wallet(s)")
+    else:
+        print("  no newly-watchlisted wallets needing a history backfill")
 
 
 def run():

@@ -3,19 +3,16 @@ order placement and account-state reads. Deliberately separate from
 clients/derive_client.py, which stays public-only/credential-free for the
 Phase 0-3 paper-trading pipeline (mainnet historical data, no auth needed).
 
-Talks to https://api-demo.lyra.finance -- NOT the derive-py SDK's default
-Chain.SEPOLIA config (testnet.api.derive.xyz), which this session confirmed
-is a different, unsynced environment: different auth header names
-(X-Derive* vs the X-Lyra* scheme that actually works here, confirmed by a
-live signed call returning real subaccount data), and a different
-DOMAIN_SEPARATOR / TRADE_MODULE address than what Derive's own Submit
-Order docs show for this specific domain. Confirmed live this session: a
-public get_instrument call against api-demo.lyra.finance returns the exact
-base_asset_address the docs' worked example hard-codes for ETH -- this
-really is the right environment, not a guess. ACTION_TYPEHASH is the one
-constant confirmed identical everywhere (derive-py's two built-in configs
-and these docs), since it's derived purely from the fixed EIP-712 type
-string, not tied to a deployment address.
+V3 (see conversation -- Derive migrated off the old V2/"Derive Wallet" SCW
+architecture on 2026-10-06): talks to https://testnet.api.derive.xyz/v3.
+The old V2 environment this file originally targeted
+(api-demo.lyra.finance, X-Lyra* headers) is now fully decommissioned --
+confirmed live, it 530s on every request post-migration. DOMAIN_SEPARATOR
+and TRADE_MODULE_ADDRESS below are V3's values (confirmed against
+docs.derive.xyz/migrating/breaking-changes and live API calls this
+session), not the old V2 ones. ACTION_TYPEHASH is unchanged -- it's
+derived purely from the fixed EIP-712 type string, not tied to a
+deployment address, and the migration docs don't list it as changed.
 
 Reuses derive-py's own SignedAction/TradeModuleData classes for the EIP-712
 encoding (both pure, environment-agnostic dataclasses that just take
@@ -36,14 +33,15 @@ from eth_account.messages import encode_defunct
 
 from config import DERIVE_ETH_CHAIN, DERIVE_SESSION_KEY, DERIVE_WALLET
 
-EXECUTION_BASE_URL = "https://api-demo.lyra.finance"
+EXECUTION_BASE_URL = "https://testnet.api.derive.xyz/v3"
 
-# Confirmed live this session against EXECUTION_BASE_URL (see module
-# docstring) -- NOT derive_py.config.contracts's values, which are for the
-# other, unsynced environment (testnet.api.derive.xyz) and differ for
-# TRADE_MODULE and DOMAIN_SEPARATOR despite looking like they should apply.
-TRADE_MODULE_ADDRESS = "0x87F2863866D85E3192a35A73b388BD625D83f2be"
-DOMAIN_SEPARATOR = "0x9bcf4dc06df5d8bf23af818d5716491b995020f377d3b7b64c29ed14e3dd1105"
+# V3 values -- confirmed against docs.derive.xyz/migrating/breaking-changes
+# and live calls this session (e.g. public/get_margin, public/get_risk_universes
+# both responded correctly using these). DOMAIN_SEPARATOR is per-chain under
+# V3 (Sepolia, chainId 11155111); TRADE_MODULE is now identical across
+# testnet/mainnet, unlike V2 where it was environment-specific.
+TRADE_MODULE_ADDRESS = "0xB8D20c2B7a1Ad2EE33Bc50eF10876eD3035b5e7b"
+DOMAIN_SEPARATOR = "0x24d674cd5f2b9d564691c51e9d88f649b99246a2244dd74ce27b96578d773e85"
 ACTION_TYPEHASH = "0x4d7a9f27c403ff9c0f19bce61d76d82f9aa29f8d6d4b0c5474607d9770d1af17"
 INT64_MAX = (1 << 63) - 1
 
@@ -57,9 +55,9 @@ def _assert_testnet():
 
 
 def _signed_headers():
-    """X-LyraWallet/X-LyraTimestamp/X-LyraSignature -- the scheme confirmed
-    working against api-demo.lyra.finance this session (NOT derive-py's
-    built-in X-Derive* headers, which are for the other environment)."""
+    """X-DeriveWallet/X-DeriveTimestamp/X-DeriveSignature -- V3's header
+    names (X-Lyra* was V2's scheme, dead along with the old environment --
+    see module docstring)."""
     _assert_testnet()
     timestamp = str(int(time.time() * 1000))
     signature = Account.sign_message(
@@ -68,9 +66,9 @@ def _signed_headers():
     if not signature.startswith("0x"):
         signature = "0x" + signature
     return {
-        "X-LyraWallet": DERIVE_WALLET,
-        "X-LyraTimestamp": timestamp,
-        "X-LyraSignature": signature,
+        "X-DeriveWallet": DERIVE_WALLET,
+        "X-DeriveTimestamp": timestamp,
+        "X-DeriveSignature": signature,
     }
 
 
@@ -195,7 +193,16 @@ def get_ticker(instrument_name):
     testnet instrument. Same purpose as clients/derive_client.get_ticker,
     duplicated here rather than shared because that one hits
     config.DERIVE_BASE_URL (mainnet) -- this file must never import from a
-    module that could point it at the wrong environment."""
+    module that could point it at the wrong environment.
+
+    V3 returns a "slim ticker" with single-letter keys (b/a=bid/ask price,
+    B/A=bid/ask amount, I=index, M=mark) instead of V2's full field names,
+    and drops instrument metadata entirely (use get_instrument() for that,
+    as every caller here already does). Translated back to the old
+    mark_price/index_price/best_bid_price/best_ask_price names below so
+    every call site in this project -- written against V2's shape --
+    keeps working unmodified; this is the one place that needs to know
+    about the slim format."""
     resp = requests.post(
         f"{EXECUTION_BASE_URL}/public/get_ticker",
         json={"instrument_name": instrument_name},
@@ -205,7 +212,15 @@ def get_ticker(instrument_name):
     data = resp.json()
     if "error" in data:
         raise RuntimeError(data["error"])
-    return data["result"]
+    slim = data["result"]
+    return {
+        "mark_price": slim.get("M"),
+        "index_price": slim.get("I"),
+        "best_bid_price": slim.get("b"),
+        "best_ask_price": slim.get("a"),
+        "best_bid_amount": slim.get("B"),
+        "best_ask_amount": slim.get("A"),
+    }
 
 
 def place_order(instrument_name, direction, amount, limit_price, subaccount_id, max_fee=Decimal("1000")):
@@ -257,15 +272,11 @@ def place_order(instrument_name, direction, amount, limit_price, subaccount_id, 
         "amount": str(amount),
         "limit_price": str(limit_price),
         "max_fee": str(max_fee),
-        # This environment's /private/order wants a raw i64, not a string
-        # (confirmed live: sending str(nonce) -- the convention derive-py's
-        # own code uses, citing JS double-precision corruption on a
-        # 19-digit nanosecond nonce -- gets rejected with "expected i64").
-        # Safe as a plain Python int here: the `requests` json= encoder
-        # serializes Python's arbitrary-precision ints as exact decimal
-        # digits, not through a lossy float, so there's no corruption risk
-        # on our side of this specific call.
-        "nonce": nonce,
+        # V3 flipped this from V2: now wants nonce as a decimal STRING, not
+        # a raw i64 (confirmed live this session -- sending the bare int
+        # gets rejected with "expected a nonce as a decimal string"). V2
+        # wanted the opposite ("expected i64" when sent as a string).
+        "nonce": str(nonce),
         "signature": action.signature,
         "signature_expiry_sec": signature_expiry_sec,
         "signer": signer_address,

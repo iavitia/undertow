@@ -16,6 +16,7 @@ from analysis.pnl import intrinsic_value, nearest_index_price
 from clients.blockscout_client import iter_token_transfers
 from clients.factbase_client import get_posts_for_window
 from config import DB_PATH, HYPOTHETICAL_STAKE_USD, HYPOTHETICAL_STAKE_USD_SMALL
+from db.cloud_conn import get_live_conn
 
 app = FastAPI(title="undertow")
 
@@ -29,17 +30,39 @@ app.add_middleware(
 ASSET_NAMES = {"BTC": "bitcoin", "ETH": "ethereum"}
 
 
-def get_conn():
+def get_local_conn():
+    """Always the full local archive, regardless of CLOUD_DATABASE_URL --
+    for every endpoint whose tables only exist locally (wallet discovery
+    research: leaderboard, copy-backtest, qualification history, featured
+    wallets, on-chain activity, annotations, news/price caches, flagged
+    anomaly events) or that need the FULL wallet universe to be useful at
+    all (any /api/wallets/{address}/* deep-dive -- a wallet clicked into
+    from search/leaderboard is very often not one of the ~75 watchlisted
+    wallets cloud actually has data for). See conversation: cloud's
+    schema deliberately only has 9 live-path tables, not these 24 -- a
+    blanket switch to cloud would 500 most of this file, not just show it
+    stale."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # scripts/run_watchlist_agent.py now writes to this same DB on an
-    # unattended 15-min schedule -- without this, a request landing mid-write
-    # gets "database is locked" immediately instead of waiting briefly for
-    # the other transaction to finish (confirmed crashing a request this
-    # session). 8s is comfortably longer than any single write in that
-    # agent's per-tick work.
+    # Harmless locally even now that nothing writes here on a schedule
+    # anymore (the old Windows task this guarded against is retired --
+    # see conversation) -- still worth keeping in case of a concurrent
+    # manual script.
     conn.execute("PRAGMA busy_timeout = 8000")
     return conn
+
+
+def get_cloud_conn():
+    """The hosted live-path DB (Supabase via GitHub Actions) -- for
+    endpoints that are specifically about CURRENT operational state
+    (pipeline health, paper-trading results, recent market activity),
+    where cloud is actually more current than local now that the local
+    Windows tasks are retired in favor of the GitHub Actions pipeline
+    (see conversation: local's agent_runs stops Oct 2, cloud's keeps
+    going). Falls back to local automatically if CLOUD_DATABASE_URL isn't
+    set (see db/cloud_conn.py), same behavior every other live-path
+    script in this project already has."""
+    return get_live_conn()
 
 
 def day_str(ts_ms):
@@ -248,7 +271,7 @@ def catalyst_detail(catalyst_id: str):
     if catalyst is None:
         raise HTTPException(404, "catalyst not found")
 
-    conn = get_conn()
+    conn = get_local_conn()
     events_by_id = {}
     positions = []
     if catalyst["related_event_ids"]:
@@ -314,7 +337,7 @@ EVENTS_SELECT = """
 
 @app.get("/api/meta")
 def meta():
-    conn = get_conn()
+    conn = get_local_conn()
     row = conn.execute("SELECT MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts FROM options_events").fetchone()
     conn.close()
     return {
@@ -328,12 +351,14 @@ def meta():
 def pipeline_status():
     """Is the live data pipeline actually running, not just "should be
     running" -- scripts/run_watchlist_agent.py's own tick history
-    (agent_runs), plus how stale the last successful ingest is."""
-    conn = get_conn()
+    (agent_runs), plus how stale the last successful ingest is. Reads
+    cloud (see get_cloud_conn): that's where this actually runs now
+    (GitHub Actions, every 15 min), not local -- see conversation."""
+    conn = get_cloud_conn()
     ingest_row = conn.execute("SELECT last_ts FROM ingest_state WHERE source = 'derive_live'").fetchone()
     now_ms = int(time.time() * 1000)
-    total_events = conn.execute("SELECT COUNT(*) FROM options_events").fetchone()[0]
-    total_wallets = conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0]
+    total_events = conn.execute("SELECT COUNT(*) AS n FROM options_events").fetchone()["n"]
+    total_wallets = conn.execute("SELECT COUNT(*) AS n FROM wallets").fetchone()["n"]
     recent_runs = conn.execute("SELECT * FROM agent_runs ORDER BY run_ts DESC LIMIT 20").fetchall()
     conn.close()
     return {
@@ -361,31 +386,29 @@ def pipeline_status():
 def recent_trades(limit: int = 50, offset: int = 0):
     """Every trade as it lands in the DB (market-wide, not just watchlist
     wallets), with whatever scoring we currently have for that wallet
-    layered on -- most wallets won't have all of it (see conversation: full
-    copy-backtest Wilson covers 7,436 wallets, the per-bucket "trade-level
-    confidence" only 3,025, walk-forward-validated Wilson only 375). Sorted
+    layered on. Reads cloud (see get_cloud_conn), which only has 3 of
+    this project's 5 wallet-scoring tables (wallet_edge_profile and
+    watchlist -- not copy_trade_backtest, walkforward_backtest, or
+    copy_candidates, which are local-only research tables, see
+    conversation) -- copy_positions/copy_win_rate_wilson_low/
+    copy_total_return_pct/formation_wilson_low/validation_wilson_low/
+    passes_screen are always None here as a result, not a query bug; the
+    frontend's "no data" styling already handles that gracefully. Sorted
     by insertion order (oe.id), not trade timestamp -- id reflects when
     something actually became visible to us, which is the honest
-    definition of "new" for a live feed, and is already the primary key so
-    this needs no extra index on a 700k+ row table."""
-    conn = get_conn()
+    definition of "new" for a live feed."""
+    conn = get_cloud_conn()
     rows = conn.execute(
         """
         SELECT oe.id, oe.instrument, oe.asset, oe.option_type, oe.strike, oe.expiry, oe.side, oe.size, oe.price,
                oe.notional_usd, oe.timestamp, oe.wallet_address, oe.rfq_id,
                w.alias,
-               ctb.copy_positions, ctb.copy_win_rate_wilson_low, ctb.copy_total_return_pct,
                wep.n AS edge_n, wep.wilson_low AS edge_wilson_low, wep.median_return_pct AS edge_median_return_pct,
-               wf.formation_wilson_low, wf.validation_wilson_low,
-               cc.passes_screen,
                (wl.wallet_address IS NOT NULL AND wl.is_active = 1) AS on_watchlist
         FROM options_events oe
         LEFT JOIN wallets w ON w.address = oe.wallet_address
-        LEFT JOIN copy_trade_backtest ctb ON ctb.wallet_address = oe.wallet_address
         LEFT JOIN wallet_edge_profile wep ON wep.wallet_address = oe.wallet_address
             AND wep.asset = oe.asset AND wep.option_type = oe.option_type AND wep.entry_side = oe.side
-        LEFT JOIN walkforward_backtest wf ON wf.wallet_address = oe.wallet_address
-        LEFT JOIN copy_candidates cc ON cc.wallet_address = oe.wallet_address
         LEFT JOIN watchlist wl ON wl.wallet_address = oe.wallet_address
         WHERE oe.wallet_address IS NOT NULL
         ORDER BY oe.id DESC
@@ -411,15 +434,15 @@ def recent_trades(limit: int = 50, offset: int = 0):
             "alias": r["alias"],
             "is_rfq": r["rfq_id"] is not None,
             "on_watchlist": bool(r["on_watchlist"]),
-            "copy_positions": r["copy_positions"],
-            "copy_win_rate_wilson_low": round(r["copy_win_rate_wilson_low"] * 100, 1) if r["copy_win_rate_wilson_low"] is not None else None,
-            "copy_total_return_pct": round(r["copy_total_return_pct"] * 100, 1) if r["copy_total_return_pct"] is not None else None,
+            "copy_positions": None,
+            "copy_win_rate_wilson_low": None,
+            "copy_total_return_pct": None,
             "edge_n": r["edge_n"],
             "edge_wilson_low": round(r["edge_wilson_low"] * 100, 1) if r["edge_wilson_low"] is not None else None,
             "edge_median_return_pct": round(r["edge_median_return_pct"] * 100, 1) if r["edge_median_return_pct"] is not None else None,
-            "formation_wilson_low": round(r["formation_wilson_low"] * 100, 1) if r["formation_wilson_low"] is not None else None,
-            "validation_wilson_low": round(r["validation_wilson_low"] * 100, 1) if r["validation_wilson_low"] is not None else None,
-            "passes_screen": bool(r["passes_screen"]) if r["passes_screen"] is not None else None,
+            "formation_wilson_low": None,
+            "validation_wilson_low": None,
+            "passes_screen": None,
         }
         for r in rows
     ]
@@ -427,7 +450,7 @@ def recent_trades(limit: int = 50, offset: int = 0):
 
 @app.get("/api/events")
 def list_events(asset: str | None = None, flag_reason: str | None = None, limit: int = 200):
-    conn = get_conn()
+    conn = get_local_conn()
     query = EVENTS_SELECT + " WHERE oe.is_flagged = 1"
     params = []
     if asset:
@@ -445,7 +468,7 @@ def list_events(asset: str | None = None, flag_reason: str | None = None, limit:
 
 @app.get("/api/events/{event_id}")
 def get_event(event_id: int):
-    conn = get_conn()
+    conn = get_local_conn()
     row = conn.execute(EVENTS_SELECT + " WHERE oe.id = ?", (event_id,)).fetchone()
     if row is None:
         conn.close()
@@ -462,7 +485,7 @@ def get_event(event_id: int):
 
 @app.get("/api/daily_signals")
 def daily_signals(asset: str):
-    conn = get_conn()
+    conn = get_local_conn()
     rows = conn.execute(
         "SELECT * FROM daily_signals WHERE asset = ? ORDER BY day", (asset.upper(),)
     ).fetchall()
@@ -480,7 +503,7 @@ def prices(asset: str, granularity: str = "daily", from_ts: int | None = None, t
         raise HTTPException(400, "granularity must be 'daily' or 'hourly'")
     bucket_fmt = "%Y-%m-%d" if granularity == "daily" else "%Y-%m-%dT%H:00:00"
 
-    conn = get_conn()
+    conn = get_local_conn()
     query = f"""
         SELECT bucket, index_price_usd, timestamp FROM (
             SELECT
@@ -651,7 +674,7 @@ def leaderboard(sort: str = "pnl", min_resolved: int = 5, include_bots: bool = F
     if sort not in ("pnl", "win_rate"):
         raise HTTPException(400, "sort must be 'pnl' or 'win_rate'")
 
-    conn = get_conn()
+    conn = get_local_conn()
     query = """
         SELECT wl.*, w.alias FROM wallet_leaderboard wl
         LEFT JOIN wallets w ON w.address = wl.wallet_address
@@ -713,7 +736,7 @@ def copy_backtest(sort: str = "wilson", min_positions: int = 20, include_bots: b
     if sort not in ("wilson", "win_rate", "avg_return", "median_return", "total_return"):
         raise HTTPException(400, "sort must be one of: wilson, win_rate, median_return, avg_return, total_return")
 
-    conn = get_conn()
+    conn = get_local_conn()
     query = """
         SELECT c.*, w.alias, l.is_likely_bot FROM copy_trade_backtest c
         LEFT JOIN wallets w ON w.address = c.wallet_address
@@ -776,7 +799,7 @@ def wallet_qualification(tier: str | None = None, sort: str = "forward_wilson_lo
     if tier is not None and tier not in valid_tiers:
         raise HTTPException(400, f"tier must be one of: {', '.join(valid_tiers)}")
 
-    conn = get_conn()
+    conn = get_local_conn()
     query = "SELECT q.*, w.alias FROM wallet_qualification q LEFT JOIN wallets w ON w.address = q.wallet_address"
     params = []
     if tier:
@@ -824,7 +847,7 @@ def wallet_qualification_history(address: str):
     over time, one per real requalification pass, so a wallet's tier and
     forward record can actually be tracked trending up or down rather than
     just read at a single point in time). Chronological, oldest first."""
-    conn = get_conn()
+    conn = get_local_conn()
     rows = conn.execute(
         "SELECT * FROM wallet_qualification_history WHERE wallet_address = ? ORDER BY computed_at ASC",
         (address,),
@@ -853,7 +876,7 @@ def wallet_qualification_history(address: str):
 
 @app.post("/api/wallets/{address}/feature")
 def feature_wallet(address: str, payload: dict = {}):
-    conn = get_conn()
+    conn = get_local_conn()
     if conn.execute("SELECT 1 FROM wallets WHERE address = ?", (address,)).fetchone() is None:
         conn.close()
         raise HTTPException(404, "wallet not found")
@@ -872,7 +895,7 @@ def get_watchlist():
     curated table (see db/schema.sql), not a live read of copy_candidates,
     so a wallet dropping off the automated screen doesn't silently orphan
     an open paper position tied to it."""
-    conn = get_conn()
+    conn = get_local_conn()
     rows = conn.execute(
         """
         SELECT wl.*, w.alias FROM watchlist wl
@@ -916,7 +939,7 @@ def add_to_watchlist(payload: dict):
     address = payload.get("address")
     if not address:
         raise HTTPException(400, "address is required")
-    conn = get_conn()
+    conn = get_local_conn()
     if conn.execute("SELECT 1 FROM wallets WHERE address = ?", (address,)).fetchone() is None:
         conn.close()
         raise HTTPException(404, "wallet not found")
@@ -948,7 +971,7 @@ def add_to_watchlist(payload: dict):
 
 @app.delete("/api/watchlist/{address}")
 def remove_from_watchlist(address: str, reason: str | None = None):
-    conn = get_conn()
+    conn = get_local_conn()
     now_ms = int(time.time() * 1000)
     conn.execute(
         "UPDATE watchlist SET is_active = 0, removed_at = ?, removed_reason = ? WHERE wallet_address = ?",
@@ -993,7 +1016,7 @@ def paper_trade_to_dict(r):
 
 @app.get("/api/paper-trades")
 def list_paper_trades(status: str | None = None, limit: int = 200):
-    conn = get_conn()
+    conn = get_cloud_conn()
     query = """
         SELECT pt.*, w.alias FROM paper_trades pt
         LEFT JOIN wallets w ON w.address = pt.source_wallet_address
@@ -1023,23 +1046,23 @@ def paper_trades_summary():
     so it's visible how positions actually ended. loss_capped_count is the
     replacement mechanism's footprint: how many naked shorts had their
     settlement return_pct floored at config.NAKED_SHORT_LOSS_FLOOR_PCT."""
-    conn = get_conn()
+    conn = get_cloud_conn()
     completed = conn.execute("SELECT * FROM paper_trades WHERE fill_status IN ('resolved', 'stopped_out')").fetchall()
-    resolved_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'resolved'").fetchone()[0]
-    stopped_out_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'stopped_out'").fetchone()[0]
-    loss_capped_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE loss_capped = 1").fetchone()[0]
-    open_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'open'").fetchone()[0]
-    pending_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'pending_entry'").fetchone()[0]
-    skipped_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'skipped_stale'").fetchone()[0]
-    skipped_naked_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'skipped_naked'").fetchone()[0]
-    skipped_weak_edge_count = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE fill_status = 'skipped_weak_edge'").fetchone()[0]
+    resolved_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'resolved'").fetchone()["n"]
+    stopped_out_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'stopped_out'").fetchone()["n"]
+    loss_capped_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE loss_capped = 1").fetchone()["n"]
+    open_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'open'").fetchone()["n"]
+    pending_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'pending_entry'").fetchone()["n"]
+    skipped_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_stale'").fetchone()["n"]
+    skipped_naked_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_naked'").fetchone()["n"]
+    skipped_weak_edge_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_weak_edge'").fetchone()["n"]
 
     wins = [r for r in completed if r["return_pct"] > 0]
     by_wallet = {}
     for r in completed:
         by_wallet.setdefault(r["source_wallet_address"], []).append(r["return_pct"])
 
-    conn2 = get_conn()
+    conn2 = get_cloud_conn()
     wallet_breakdown = []
     for addr, returns in by_wallet.items():
         alias_row = conn2.execute("SELECT alias FROM wallets WHERE address = ?", (addr,)).fetchone()
@@ -1131,7 +1154,7 @@ def search_wallets(
     if sort not in ("notional", "win_rate", "pnl", "trades"):
         raise HTTPException(400, "sort must be one of: notional, win_rate, pnl, trades")
 
-    conn = get_conn()
+    conn = get_local_conn()
     query = """
         SELECT w.address, w.alias, w.first_seen, w.label,
                l.positions, l.win_rate, l.net_of_fees, l.avg_notional_usd, l.is_likely_bot,
@@ -1209,7 +1232,7 @@ def list_wallets(asset: str | None = None, limit: int = 100):
     regardless of ranking. A featured wallet with zero flagged events
     still shows up, just with zeroed stats -- pinning is a manual research
     call, not dependent on the detectors having fired."""
-    conn = get_conn()
+    conn = get_local_conn()
 
     featured_addresses = [r["address"] for r in conn.execute("SELECT address FROM featured_wallets ORDER BY added_at").fetchall()]
     featured_rows = []
@@ -1257,7 +1280,7 @@ def list_wallets(asset: str | None = None, limit: int = 100):
 
 @app.get("/api/wallets/{address}")
 def wallet_detail(address: str):
-    conn = get_conn()
+    conn = get_local_conn()
     wallet_row = conn.execute(
         "SELECT address, chain, first_seen, label, alias FROM wallets WHERE address = ?", (address,)
     ).fetchone()
@@ -1315,7 +1338,7 @@ def wallet_ratings(address: str):
         record broken out by (asset, option_type, entry_side) instead of
         one blended number -- a wallet's edge is usually concentrated in a
         specific kind of trade, not uniform across everything it does."""
-    conn = get_conn()
+    conn = get_local_conn()
     if conn.execute("SELECT 1 FROM wallets WHERE address = ?", (address,)).fetchone() is None:
         conn.close()
         raise HTTPException(404, "wallet not found")
@@ -1419,7 +1442,7 @@ def wallet_portfolio(address: str):
     Derive's trade API doesn't expose. Flagged per-position as
     pnl_is_estimated whenever that price stand-in was actually needed
     (net_qty != 0 at expiry)."""
-    conn = get_conn()
+    conn = get_local_conn()
     if conn.execute("SELECT 1 FROM wallets WHERE address = ?", (address,)).fetchone() is None:
         conn.close()
         raise HTTPException(404, "wallet not found")
@@ -1470,7 +1493,7 @@ def wallet_position_legs(address: str, instrument: str):
     """Every individual fill making up one position (wallet + instrument),
     full detail per leg -- what the "expand" interaction on a position
     row fetches."""
-    conn = get_conn()
+    conn = get_local_conn()
     rows = conn.execute(
         EVENTS_SELECT + " WHERE oe.wallet_address = ? AND oe.instrument = ? ORDER BY oe.timestamp",
         (address, instrument),
@@ -1499,7 +1522,7 @@ def wallet_value_timeline(address: str):
     already ~1:1 USD, so it doesn't need a price feed to be meaningful.
     Both bucketed to daily resolution and forward-filled onto one merged
     timeline for charting."""
-    conn = get_conn()
+    conn = get_local_conn()
     wallet_row = conn.execute("SELECT id FROM wallets WHERE address = ?", (address,)).fetchone()
     if wallet_row is None:
         conn.close()
@@ -1563,7 +1586,7 @@ def wallet_onchain_activity(address: str, refresh: bool = False):
     'options_trade' and are already reflected in your options data; the
     'deposit'/'withdrawal' ones are the genuine bridge-level capital flows
     in and out of Derive."""
-    conn = get_conn()
+    conn = get_local_conn()
     wallet_row = conn.execute("SELECT id FROM wallets WHERE address = ?", (address,)).fetchone()
     if wallet_row is None:
         conn.close()
@@ -1658,7 +1681,7 @@ def _sync_onchain_activity(conn, address, wallet_id):
 
 @app.get("/api/annotations")
 def list_annotations(event_id: int):
-    conn = get_conn()
+    conn = get_local_conn()
     rows = conn.execute(
         "SELECT * FROM annotations WHERE related_event_id = ? AND related_event_table = 'options_events' "
         "ORDER BY added_at DESC",
@@ -1675,7 +1698,7 @@ def create_annotation(payload: dict):
     if not event_id or not note:
         raise HTTPException(400, "related_event_id and note are required")
 
-    conn = get_conn()
+    conn = get_local_conn()
     conn.execute(
         """
         INSERT INTO annotations
@@ -1774,7 +1797,7 @@ def trump_posts(start_date: str, end_date: str):
     itself -- Trump posts about everything -- so each post is tagged
     is_crypto_related by a simple keyword match; all posts in the window
     are still returned; you judge relevance yourself."""
-    conn = get_conn()
+    conn = get_local_conn()
     cached = conn.execute(
         "SELECT items_json FROM trump_posts_cache WHERE start_date = ? AND end_date = ?",
         (start_date, end_date),

@@ -57,7 +57,10 @@ def upsert_trade(conn, currency, trade):
             trade["timestamp"],
             float(trade["mark_price"]) if trade.get("mark_price") is not None else None,
             trade.get("rfq_id"),
-            trade.get("tx_status"),
+            # V3 renamed this field to batch_status ("Batching"/"Settled",
+            # title-cased) -- fall back to the old V2 name too in case this
+            # ever ingests from a source still using it.
+            trade.get("batch_status") or trade.get("tx_status"),
             float(trade["trade_fee"]) if trade.get("trade_fee") is not None else None,
             trade.get("liquidity_role"),
             float(trade["realized_pnl"]) if trade.get("realized_pnl") is not None else None,

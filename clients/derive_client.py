@@ -60,12 +60,20 @@ def get_trade_history(currency, from_timestamp, to_timestamp, page=1, page_size=
 
 def get_ticker(instrument_name, max_retries=5):
     """Live snapshot of one instrument -- mark_price, index_price, and
-    option_pricing (delta/theta/gamma/vega/iv/rho, unused until the
-    Greeks-collection follow-up). Confirmed live earlier this session:
-    this is a live-only endpoint, no historical/backfill equivalent exists
-    (see scripts/backtest_stop_loss.py's docstring -- that's why the
-    historical backtest has to approximate with intrinsic value instead).
-    Same retry/backoff shape as get_trade_history."""
+    option_pricing (delta/theta/gamma/vega/iv/rho). Confirmed live earlier
+    this session: this is a live-only endpoint, no historical/backfill
+    equivalent exists (see scripts/backtest_stop_loss.py's docstring --
+    that's why the historical backtest has to approximate with intrinsic
+    value instead). Same retry/backoff shape as get_trade_history.
+
+    V3 returns a "slim ticker" with single-letter keys (b/a=bid/ask price,
+    B/A=bid/ask amount, I=index, M=mark) and an abbreviated option_pricing
+    sub-object (d/t/g/v/i/r = delta/theta/gamma/vega/iv/rho, matching each
+    greek's own first letter) instead of V2's full field names -- same
+    issue already found and fixed in
+    clients/derive_execution_client.get_ticker (that one's own docstring
+    has the fuller explanation); translated back to the old names below so
+    every call site written against V2's shape keeps working unmodified."""
     for attempt in range(max_retries):
         try:
             resp = requests.post(
@@ -77,7 +85,24 @@ def get_ticker(instrument_name, max_retries=5):
             data = resp.json()
             if "error" in data:
                 raise RuntimeError(data["error"])
-            return data["result"]
+            slim = data["result"]
+            slim_greeks = slim.get("option_pricing") or {}
+            return {
+                "mark_price": slim.get("M"),
+                "index_price": slim.get("I"),
+                "best_bid_price": slim.get("b"),
+                "best_ask_price": slim.get("a"),
+                "best_bid_amount": slim.get("B"),
+                "best_ask_amount": slim.get("A"),
+                "option_pricing": {
+                    "delta": slim_greeks.get("d"),
+                    "theta": slim_greeks.get("t"),
+                    "gamma": slim_greeks.get("g"),
+                    "vega": slim_greeks.get("v"),
+                    "iv": slim_greeks.get("i"),
+                    "rho": slim_greeks.get("r"),
+                },
+            }
         except (
             requests.exceptions.ConnectionError,
             requests.exceptions.Timeout,

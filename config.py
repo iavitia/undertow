@@ -9,8 +9,18 @@ load_dotenv(BASE_DIR / ".env")  # no-op if .env doesn't exist -- fine for Phase 
 DB_PATH = BASE_DIR / "data" / "undertow.db"
 SCHEMA_PATH = BASE_DIR / "db" / "schema.sql"
 
-DERIVE_BASE_URL = "https://api.lyra.finance"
-DERIVE_TESTNET_BASE_URL = "https://api-demo.lyra.finance"  # Phase 4 (real execution), not used yet
+# Was "https://api.lyra.finance" (V2) -- confirmed live this session that
+# domain didn't 530 like the testnet one did (clients/derive_execution_client.py's
+# docstring), it just silently stopped receiving new trades around the
+# same Oct 6 2026 V3 migration: querying it with a wide time range still
+# returns real historical data, but nothing after ~2026-10-06T17:53Z, no
+# matter how recent the query window. That silently starved the entire
+# ingest pipeline (scripts/live_poll.py) for 3+ days -- every tick
+# "succeeded" (0 trades is a valid, no-op return, not an error) while
+# wallet discovery/qualification/candidate detection all quietly saw
+# nothing new. V3's public mainnet endpoint confirmed live with current
+# data for ETH/BTC/SOL.
+DERIVE_BASE_URL = "https://api.derive.xyz/v3"
 DERIBIT_BASE_URL = "https://www.deribit.com/api/v2"
 
 # Phase 4 credentials, unset until that phase is built -- see .env.example.

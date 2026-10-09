@@ -48,8 +48,10 @@ source for both BTC and ETH. (Deribit was evaluated and dropped — see §2.4 �
 its client/poller are left in the repo, unused, in case a higher-volume BTC
 signal is wanted later.)
 
-- `clients/derive_client.py` talks to `https://api.lyra.finance` via two public
-  REST endpoints:
+- `clients/derive_client.py` talks to `https://api.derive.xyz/v3` (was
+  `https://api.lyra.finance`, V2 -- that domain silently stopped receiving new
+  trades around the Oct 6 2026 V3 migration without ever erroring, see
+  config.py's DERIVE_BASE_URL comment) via two public REST endpoints:
   - `POST /public/get_trade_history` — historical + incremental trade legs,
     paginated (1000/page), 5-retry exponential backoff on transient network
     errors.

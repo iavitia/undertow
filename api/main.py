@@ -1056,6 +1056,7 @@ def paper_trades_summary():
     skipped_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_stale'").fetchone()["n"]
     skipped_naked_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_naked'").fetchone()["n"]
     skipped_weak_edge_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'skipped_weak_edge'").fetchone()["n"]
+    never_filled_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'never_filled'").fetchone()["n"]
 
     wins = [r for r in completed if r["return_pct"] > 0]
     by_wallet = {}
@@ -1108,6 +1109,7 @@ def paper_trades_summary():
         "skipped_stale_count": skipped_count,
         "skipped_naked_count": skipped_naked_count,
         "skipped_weak_edge_count": skipped_weak_edge_count,
+        "never_filled_count": never_filled_count,
         "win_rate": round(len(wins) / len(completed) * 100, 1) if completed else None,
         "total_return_pct": round(sum(r["return_pct"] for r in completed) / len(completed) * 100, 1) if completed else None,
         "total_hypothetical_income_usd": round(sum(r["return_pct"] for r in completed) * HYPOTHETICAL_STAKE_USD, 2) if completed else None,

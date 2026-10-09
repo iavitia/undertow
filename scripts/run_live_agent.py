@@ -50,7 +50,9 @@ from clients.derive_execution_client import (
     estimate_fee,
     get_account_state,
     get_instrument,
+    get_open_orders,
     get_ticker,
+    get_trade_history,
     place_order,
     simulate_margin,
 )
@@ -331,6 +333,77 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, 
     return margin_used / total_value
 
 
+def reconcile_open_orders(conn, subaccount_id, now_ms):
+    """Checks every mode='testnet_order' row this subaccount currently has
+    marked fill_status='open' against Derive's own real state -- see
+    conversation: nothing previously ever checked back on a real order
+    after place_order() returned an order_id, so a row could sit marked
+    'open' indefinitely regardless of what actually happened to it on the
+    exchange. Confirmed live this session: 42 of 43 real option orders
+    placed over 48h were neither filled nor still resting -- likely a
+    plain order's 10-minute signature_expiry_sec letting Derive drop an
+    unmatched GTC order, though that exact mechanism isn't confirmed, just
+    consistent with every data point found.
+
+    Three outcomes per row:
+      - confirmed real fill (its testnet_order_id shows up in
+        get_trade_history) -- entry_price corrected to the real
+        weighted-average fill price rather than the originally intended
+        limit price, fill_status stays 'open' (genuinely pending
+        settlement at the instrument's own expiry, same as before).
+      - still resting (shows up in get_open_orders, not yet matched) --
+        left untouched, genuinely still pending a decision.
+      - neither -- fill_status flips to 'never_filled' so it stops being
+        treated as real exposure and drops out of every win-rate/return
+        aggregate the same way skipped_* rows already do.
+
+    Returns (confirmed, still_resting, phantom) counts."""
+    open_rows = conn.execute(
+        "SELECT id, testnet_order_id, created_at FROM paper_trades WHERE mode = 'testnet_order' AND fill_status = 'open' AND subaccount_id = ?",
+        (subaccount_id,),
+    ).fetchall()
+    if not open_rows:
+        return 0, 0, 0
+
+    since_ms = min(r["created_at"] for r in open_rows) - 3600000  # 1h buffer for clock skew
+    resting_ids = {o["order_id"] for o in get_open_orders(subaccount_id).get("orders", [])}
+
+    fills_by_order = {}
+    page = 1
+    while True:
+        trades = get_trade_history(subaccount_id, since_ms, now_ms, page=page, page_size=200).get("trades", [])
+        if not trades:
+            break
+        for t in trades:
+            fills_by_order.setdefault(t["order_id"], []).append(t)
+        if len(trades) < 200:
+            break
+        page += 1
+
+    confirmed = still_resting = phantom = 0
+    for row in open_rows:
+        oid = row["testnet_order_id"]
+        if oid in fills_by_order:
+            legs = fills_by_order[oid]
+            total_amount = sum(float(t["trade_amount"]) for t in legs)
+            avg_price = sum(float(t["trade_price"]) * float(t["trade_amount"]) for t in legs) / total_amount
+            conn.execute(
+                "UPDATE paper_trades SET entry_price = ?, notes = ? WHERE id = ?",
+                (avg_price, f"reconciled at {now_ms}: confirmed real fill, {len(legs)} leg(s)", row["id"]),
+            )
+            confirmed += 1
+        elif oid in resting_ids:
+            still_resting += 1
+        else:
+            conn.execute(
+                "UPDATE paper_trades SET fill_status = 'never_filled', notes = ? WHERE id = ?",
+                (f"reconciled at {now_ms}: no fill or resting order found on Derive", row["id"]),
+            )
+            phantom += 1
+    conn.commit()
+    return confirmed, still_resting, phantom
+
+
 def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
@@ -365,6 +438,12 @@ def run_live_tick(conn):
     # pooled) since every subaccount in SUBACCOUNT_CONFIGS is its own,
     # independently margined account.
     subaccount_ids = {cfg["subaccount_id"] for cfg in SUBACCOUNT_CONFIGS}
+
+    for sid in subaccount_ids:
+        confirmed, still_resting, phantom = reconcile_open_orders(conn, sid, now_ms)
+        if confirmed or still_resting or phantom:
+            print(f"reconciled subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled (flipped to never_filled)")
+
     current_states = {sid: get_account_state(sid) for sid in subaccount_ids}
     buying_power_floors = {
         sid: float(state.get("initial_margin") or 0) * MIN_BUYING_POWER_FRACTION

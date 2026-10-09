@@ -618,7 +618,18 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     -- checkable wallet-own outcome would have been a win if left alone).
     -- Replaced by config.NAKED_SHORT_LOSS_FLOOR_PCT -- see resolved below
     -- and loss_capped.
-    fill_status TEXT NOT NULL CHECK (fill_status IN ('pending_entry', 'open', 'resolved', 'skipped_stale', 'skipped_naked', 'skipped_weak_edge', 'stopped_out')),
+    -- never_filled (see conversation): a mode='testnet_order' row whose
+    -- real order neither filled nor is still resting on Derive when
+    -- scripts/run_live_agent.py's reconcile_open_orders() checks it --
+    -- the order's own signature_expiry_sec (10 minutes for a plain,
+    -- non-trigger order) appears to let Derive drop an unmatched GTC
+    -- order rather than keep it resting indefinitely. Confirmed live:
+    -- 42 of 43 real option orders placed over 48h were neither filled
+    -- nor resting -- phantom DB rows with no real exchange position
+    -- behind them at all. Left out of every win-rate/return aggregate
+    -- the same way skipped_* statuses already are; notes records what
+    -- the reconciliation check found.
+    fill_status TEXT NOT NULL CHECK (fill_status IN ('pending_entry', 'open', 'resolved', 'skipped_stale', 'skipped_naked', 'skipped_weak_edge', 'stopped_out', 'never_filled')),
     testnet_order_id TEXT,
     resolved_ts INTEGER,
     exit_price REAL,

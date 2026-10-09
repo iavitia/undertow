@@ -24,6 +24,7 @@ const STATUS_STYLE = {
   skipped_stale: { label: "skipped (stale)", color: TOKENS.bad },
   skipped_naked: { label: "skipped (naked, retired)", color: TOKENS.dim },
   skipped_weak_edge: { label: "skipped (weak edge)", color: TOKENS.flare },
+  never_filled: { label: "never filled", color: TOKENS.bad },
 };
 
 function EdgeBadge({ t }) {
@@ -190,6 +191,7 @@ export function PaperTradingView() {
             <StatCard label="Pricing" value={summary.pending_count} accent={TOKENS.flare} />
             <StatCard label="Skipped (stale)" value={summary.skipped_stale_count} />
             <StatCard label="Skipped (weak edge)" value={summary.skipped_weak_edge_count} accent={TOKENS.flare} />
+            <StatCard label="Never filled" value={summary.never_filled_count} accent={TOKENS.bad} />
           </div>
 
           <div style={{ marginTop: 20 }}>
@@ -281,6 +283,7 @@ export function PaperTradingView() {
                   { label: "pricing", value: "pending_entry" },
                   { label: "skipped (weak edge)", value: "skipped_weak_edge" },
                   { label: "skipped (naked, retired)", value: "skipped_naked" },
+                  { label: "never filled", value: "never_filled" },
                 ].map((o) => (
                   <button
                     key={o.label}

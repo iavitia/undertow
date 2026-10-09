@@ -152,7 +152,9 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     intended_price DOUBLE PRECISION,
     entry_price DOUBLE PRECISION,
     entry_ts BIGINT,
-    fill_status TEXT NOT NULL CHECK (fill_status IN ('pending_entry', 'open', 'resolved', 'skipped_stale', 'skipped_naked', 'skipped_weak_edge', 'stopped_out')),
+    -- never_filled: see db/schema.sql's matching comment -- a real order
+    -- that reconciliation found neither filled nor resting on Derive.
+    fill_status TEXT NOT NULL CHECK (fill_status IN ('pending_entry', 'open', 'resolved', 'skipped_stale', 'skipped_naked', 'skipped_weak_edge', 'stopped_out', 'never_filled')),
     testnet_order_id TEXT,
     resolved_ts BIGINT,
     exit_price DOUBLE PRECISION,

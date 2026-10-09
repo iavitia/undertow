@@ -109,6 +109,40 @@ def get_account_state(subaccount_id):
     return _private_post("/private/get_subaccount", {"subaccount_id": subaccount_id})
 
 
+def get_open_orders(subaccount_id):
+    """Real resting orders currently on the book for one subaccount --
+    distinct from get_trade_history (executed fills only): an order can be
+    neither filled nor resting if it was placed, never matched, and then
+    dropped by Derive once its own signature_expiry_sec passed (plain
+    orders default to a 10-minute window -- see place_order) -- "gtc"
+    time_in_force does not appear to override that; confirmed live this
+    session that a large batch of 'open' testnet_order rows in our own DB
+    are neither filled nor resting here, decided this needed its own
+    direct check rather than inferring it from get_trade_history alone."""
+    return _private_post("/private/get_open_orders", {"subaccount_id": subaccount_id})
+
+
+def get_trade_history(subaccount_id, from_timestamp, to_timestamp, page=1, page_size=100):
+    """Real, executed fills for one subaccount in a time window -- ground
+    truth for "did anything actually land on the exchange," independent of
+    our own paper_trades rows (which record an order ATTEMPT, not a
+    confirmed fill -- see conversation re: the stale-scheduled-run bug that
+    made several real attempts fail before ever reaching Derive). Separate
+    from clients/derive_client.get_trade_history, which is the public,
+    no-auth, mainnet-historical endpoint for the Phase 0-3 data pipeline --
+    this one is private, testnet, and scoped to a single real subaccount."""
+    return _private_post(
+        "/private/get_trade_history",
+        {
+            "subaccount_id": subaccount_id,
+            "from_timestamp": from_timestamp,
+            "to_timestamp": to_timestamp,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
 def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM", market=None):
     """Public, no auth needed -- the real preview/what-if endpoint
     (public/order_debug, despite its name, only validates signature

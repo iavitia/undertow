@@ -9,10 +9,16 @@ name: Watchlist agent (ingest + paper trading)
 # plan: requalification frequency (which wallets are even on the
 # watchlist) is a separate, local-only, manual lever
 # (scripts/sync_watchlist_to_cloud.py) -- unaffected by this schedule.
+#
+# No `schedule:` trigger (see conversation): GitHub's own cron is
+# best-effort with no SLA and was confirmed firing every 6-7h instead of
+# the configured 15 min, and at one point got stuck re-running a stale
+# commit for days. Supabase's pg_cron (same project as CLOUD_DATABASE_URL)
+# now calls this workflow's `dispatches` API endpoint every 15 min instead
+# -- `workflow_dispatch`-triggered runs aren't subject to the same
+# scheduling delay, confirmed firing within seconds of the cron tick.
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
 concurrency:

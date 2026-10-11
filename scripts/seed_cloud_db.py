@@ -54,12 +54,49 @@ def create_schema(cloud):
     cloud.commit()
 
 
+def deactivate_removed_wallets(local, cloud):
+    """Propagates a local active->inactive watchlist transition to cloud
+    -- see conversation: sync_live_wallets() below only ever SELECTs
+    local rows WHERE is_active = 1, so a wallet that drops off the
+    active set is simply never included in that push, and its cloud row
+    is left stuck at whatever is_active value it had before. Confirmed
+    live this session: this wasn't just a one-time gap from a single
+    requalification -- a wallet deactivated in an EARLIER, unrelated
+    requalification was still sitting active on cloud too, meaning the
+    live pipeline had been copying a wallet the local watchlist had
+    already dropped. Called before the active-only push below so a
+    wallet that somehow shows up in both sets (shouldn't happen, but
+    cheap to order defensively) ends up correctly active."""
+    local_inactive = {
+        r["wallet_address"] for r in local.execute("SELECT wallet_address FROM watchlist WHERE is_active = 0").fetchall()
+    }
+    cloud_active = {
+        r["wallet_address"] for r in cloud.execute("SELECT wallet_address FROM watchlist WHERE is_active = 1").fetchall()
+    }
+    stale = cloud_active & local_inactive
+    if not stale:
+        print("  no stale-active cloud wallets to deactivate")
+        return
+    for addr in stale:
+        row = local.execute(
+            "SELECT removed_at, removed_reason FROM watchlist WHERE wallet_address = ?", (addr,)
+        ).fetchone()
+        cloud.execute(
+            "UPDATE watchlist SET is_active = 0, removed_at = ?, removed_reason = ? WHERE wallet_address = ?",
+            (row["removed_at"], row["removed_reason"], addr),
+        )
+    cloud.commit()
+    print(f"  deactivated {len(stale)} stale-active wallet(s) on cloud")
+
+
 def sync_live_wallets(local, cloud):
     """Pushes wallets/watchlist/wallet_qualification/wallet_edge_profile
     for the current active watchlist from local SQLite to the cloud DB.
     Shared by this script's initial seed and
     scripts/sync_watchlist_to_cloud.py's day-to-day refresh -- same
     operation, different occasions, no reason for two copies."""
+    deactivate_removed_wallets(local, cloud)
+
     active = local.execute("SELECT wallet_address FROM watchlist WHERE is_active = 1").fetchall()
     addresses = [r["wallet_address"] for r in active]
     print(f"{len(addresses)} active watchlist wallets to seed")

@@ -41,11 +41,12 @@ mechanics -- a real-money version would need testnet's own settlement
 price, not this project's existing mainnet-sourced one."""
 import sys
 import time
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from clients.derive_client import parse_instrument
 from clients.derive_execution_client import (
     estimate_fee,
     get_account_state,
@@ -56,7 +57,13 @@ from clients.derive_execution_client import (
     place_order,
     simulate_margin,
 )
-from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_FAST, DERIVE_SUBACCOUNT_ID_SOL, EXECUTION_ENABLED
+from config import (
+    DERIVE_SUBACCOUNT_ID,
+    DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO,
+    DERIVE_SUBACCOUNT_ID_FAST,
+    DERIVE_SUBACCOUNT_ID_SOL,
+    EXECUTION_ENABLED,
+)
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.run_watchlist_agent import find_new_candidates
 
@@ -132,6 +139,24 @@ SUBACCOUNT_CONFIGS = [
         # correctly here avoids that noise rather than relying on
         # place_order()'s try/except to paper over it.
         {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY, "max_margin_utilization_fraction": FAST_MAX_MARGIN_UTILIZATION_FRACTION},
+        # Portfolio Margin, ETH-only, covered strategies -- see
+        # conversation and config.py's comment on the subaccount id.
+        # Fundamentally different from the three above (naked premium
+        # collection): "sides": {"sell"} since buying an option isn't a
+        # covered/secured strategy at all, "sizing": "collateral_coverage"
+        # routes it through _size_for_collateral_coverage() instead of
+        # the fee-only sizing every other config uses (confirmed live
+        # this session: the fee-only sizer has no concept of held
+        # ETH/USDC and could easily size a call past what's actually
+        # covered), and "stop_loss": False since a covered position's
+        # real protection is the held collateral itself, not a buy-back
+        # trigger -- forcing one here could crystallize a loss on the
+        # option while the offsetting gain on held ETH goes uncaptured.
+        {
+            "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
+            "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
+            "sides": {"sell"}, "sizing": "collateral_coverage", "stop_loss": False,
+        },
     ]
     if cfg["subaccount_id"] is not None
 ]
@@ -276,6 +301,50 @@ def _size_for_fee_coverage(instrument, limit_price, index_price):
     if amount > minimum * MAX_SIZE_MULTIPLE:
         return None
     return amount
+
+
+def _size_for_collateral_coverage(state, instrument, c):
+    """Coverage ceiling for the eth-portfolio subaccount (see
+    conversation): the largest size that stays genuinely covered/secured
+    by what's actually held, after accounting for coverage already
+    committed to other open short positions on this account. A call is
+    capped by held ETH; a put is capped by held USDC / strike (cash-
+    secured). Existing positions' coverage draw is computed from their
+    own instrument names via clients.derive_client.parse_instrument --
+    pure string parsing, no network/environment dependency, safe to
+    reuse here.
+
+    This is a ceiling, not a target -- the caller takes the smaller of
+    this and _size_for_fee_coverage()'s minimum, so a position only ever
+    gets sized at the smallest size that's both economical and covered.
+    Returns None if there's no coverage capacity left for this option
+    type at all (floored at 0, not negative, since this account could in
+    principle already be over-committed from a manual trade)."""
+    option_type = c["option_type"]
+    asset_name = "ETH" if option_type == "call" else "USDC"
+    held = next((float(col["amount"]) for col in state.get("collaterals", []) if col["asset_name"] == asset_name), 0.0)
+
+    committed = 0.0
+    for p in state.get("positions", []):
+        amt = float(p.get("amount") or 0)
+        if amt >= 0:
+            continue  # only short positions draw down coverage
+        parsed = parse_instrument(p["instrument_name"])
+        if parsed is None or parsed["option_type"] != option_type:
+            continue
+        committed += abs(amt) * (parsed["strike"] if option_type == "put" else 1.0)
+
+    available = max(held - committed, 0.0)
+    max_contracts = (available / c["strike"]) if option_type == "put" else available
+    if max_contracts <= 0:
+        return None
+
+    amount_step = Decimal(instrument["amount_step"])
+    minimum = Decimal(instrument["minimum_amount"])
+    capped = (Decimal(str(max_contracts)) / amount_step).to_integral_value(rounding=ROUND_FLOOR) * amount_step
+    if capped < minimum:
+        return None
+    return capped
 
 
 def _margin_for_instrument(state, instrument_name):
@@ -499,10 +568,12 @@ def run_live_tick(conn):
     for config in SUBACCOUNT_CONFIGS:
         subaccount_id = config["subaccount_id"]
         max_days = config["max_days_to_expiry"]
+        allowed_sides = config.get("sides")
         matching = [
             item for item in pending
             if item[1]["asset"] in config["assets"]
             and (max_days is None or (item[1]["expiry"] - now_ms / 1000) / 86400 <= max_days)
+            and (allowed_sides is None or item[1]["side"] in allowed_sides)
         ]
         if max_days is not None:
             matching.sort(key=lambda item: item[1]["expiry"])  # soonest-expiry first
@@ -540,6 +611,13 @@ def run_live_tick(conn):
                 skipped_uneconomical += 1
                 continue
 
+            if config.get("sizing") == "collateral_coverage":
+                coverage_cap = _size_for_collateral_coverage(current_states[subaccount_id], instrument, c)
+                if coverage_cap is None or coverage_cap < amount:
+                    print(f"{c['instrument']} skipped on {config['name']} -- fee-minimum size {amount} would exceed available collateral coverage ({coverage_cap}), not placing a partially-naked position")
+                    skipped_uneconomical += 1
+                    continue
+
             try:
                 utilization = _margin_utilization_after(current_states[subaccount_id], c["instrument"], c["side"], amount, c["asset"])
             except Exception as e:
@@ -568,7 +646,7 @@ def run_live_tick(conn):
             entry_price = float(order["limit_price"])
 
             stop_order_id = None
-            if c["side"] == "sell":
+            if c["side"] == "sell" and config.get("stop_loss", True):
                 stop_order_id = _attach_stop_loss(
                     instrument_name=c["instrument"],
                     subaccount_id=subaccount_id,
@@ -605,7 +683,14 @@ def run_live_tick(conn):
                      now_ms, subaccount_id),
                 )
                 placed += 1
-                stop_note = f", stop-loss {stop_order_id}" if stop_order_id else (", UNPROTECTED (no stop)" if c["side"] == "sell" else "")
+                if stop_order_id:
+                    stop_note = f", stop-loss {stop_order_id}"
+                elif c["side"] == "sell" and not config.get("stop_loss", True):
+                    stop_note = ", no stop by design (covered strategy)"
+                elif c["side"] == "sell":
+                    stop_note = ", UNPROTECTED (no stop)"
+                else:
+                    stop_note = ""
                 print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}{stop_note}")
             except INTEGRITY_ERRORS:
                 pass

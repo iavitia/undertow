@@ -41,6 +41,16 @@ DERIVE_SUBACCOUNT_ID_SOL = int(os.environ["DERIVE_SUBACCOUNT_ID_SOL"]) if os.env
 # scripts/run_live_agent.py's SUBACCOUNT_CONFIGS skips it entirely while
 # unset, same pattern as the other two.
 DERIVE_SUBACCOUNT_ID_FAST = int(os.environ["DERIVE_SUBACCOUNT_ID_FAST"]) if os.environ.get("DERIVE_SUBACCOUNT_ID_FAST") else None
+# Portfolio Margin (PM2), ETH-denominated collateral only -- see conversation.
+# Specifically for covered calls/cash-secured puts: confirmed live this
+# session that PM2 gives real, substantial margin relief (~90% at full
+# coverage) for a short ETH option backed by held ETH/USDC, which Standard
+# Margin does not provide at all. Deliberately NOT routed through the same
+# SUBACCOUNT_CONFIGS logic as Prime/Alt/Fast (naked premium collection) --
+# needs its own coverage-capped sizing (never sell more than what's
+# actually held) and no stop-loss (a covered position's real protection is
+# the held collateral, not a buy-back trigger).
+DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO = int(os.environ["DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO"]) if os.environ.get("DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO") else None
 # Must stay "SEPOLIA" for the lifetime of this project's paper-trading/testnet
 # phase -- clients/derive_execution_client.py refuses to run against
 # anything else. Never set this to a mainnet chain casually.

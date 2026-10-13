@@ -23,6 +23,18 @@ A copy price further than STALENESS_WINDOW_MS after the reference
 timestamp is treated as not realistically copyable (the instrument went
 quiet) and excluded rather than used stale.
 
+Copy prices are side-aware TAKER prints only, no earlier than
+COPY_LATENCY_MS after the reference trade (see docs/quant-review-2026-10.md):
+a copier entering a buy pays the ask, so only prints where the taker BOUGHT
+qualify (and taker-SOLD prints for a copier selling, at the bid). This also
+removes the biggest pricing artifact this backtest used to have: Derive
+records every fill as two legs (maker + taker) at an identical price, and
+the old "any other wallet, at or after the trade's own timestamp" lookup
+priced 85% of copy entries at the source wallet's own fill via its
+counterparty's leg (0s lag). That counterparty leg is always either the
+maker leg or a taker leg on the opposite side, so the taker+side filter
+excludes it by construction.
+
 RFQ trades are excluded as a copy-price source if they share an rfq_id
 the wallet itself used for that instrument: an RFQ deal is one bilateral
 transaction split into two DB rows (maker + taker) at a single pre-agreed
@@ -36,8 +48,9 @@ RFQ-matched, so this isn't a rare edge case.
 
 Returns are expressed as return-on-premium (the standard options
 convention): for a buy, (exit_value - entry_price) / entry_price; for a
-sell, (entry_price - exit_value) / entry_price. Fees are not modeled -- a
-copier's fee schedule would differ from the original wallet's anyway.
+sell, (entry_price - exit_value) / entry_price -- minus the copier's own
+taker fees (analysis.pnl.copy_taker_fee_pct) on every leg it trades: entry,
+plus exit when the wallet closed early (expiry settlement has no taker leg).
 """
 import math
 import sqlite3
@@ -49,6 +62,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from analysis.pnl import copy_taker_fee_pct
+from config import COPY_LATENCY_MS
 from config import COPY_STALENESS_WINDOW_MS as STALENESS_WINDOW_MS
 from config import DB_PATH
 
@@ -68,40 +83,50 @@ def wilson_lower_bound(wins, n, z=1.96):
 
 
 def build_instrument_price_index(df):
-    """instrument -> (timestamps, wallet_addresses, prices, rfq_ids), each
-    sorted by timestamp, for the "next print by another wallet" lookup."""
+    """instrument -> (timestamps, wallet_addresses, prices, rfq_ids, sides,
+    index_prices), each sorted by timestamp, for the "next print by
+    another wallet" lookup. Taker legs only: a print's taker side is the
+    direction a copier crossing the spread would have traded (see module
+    docstring), and dropping maker legs also drops the counterparty half
+    of every fill."""
     index = {}
-    for instrument, grp in df.groupby("instrument", sort=False):
+    takers = df[df["liquidity_role"] == "taker"]
+    for instrument, grp in takers.groupby("instrument", sort=False):
         g = grp.sort_values("timestamp")
         index[instrument] = (
             g["timestamp"].to_numpy(),
             g["wallet_address"].to_numpy(),
             g["price"].to_numpy(),
             g["rfq_id"].to_numpy(),
+            g["side"].to_numpy(),
+            g["index_price_usd"].to_numpy(),
         )
     return index
 
 
-def next_other_wallet_print(price_index, instrument, wallet_address, after_ts, excluded_rfq_ids):
-    """First trade in this instrument, by a wallet other than
-    wallet_address, at or after after_ts, within STALENESS_WINDOW_MS, and
-    not sharing an rfq_id this wallet itself used for this instrument (see
-    module docstring -- an RFQ deal's two legs land at an identical
-    pre-agreed price seconds apart, so without this exclusion the "next
-    print" is very often just the guaranteed other half of the wallet's
-    own trade). Returns (price, timestamp) or (None, None)."""
-    timestamps, wallets, prices, rfq_ids = price_index[instrument]
-    start = np.searchsorted(timestamps, after_ts, side="left")
-    cutoff = after_ts + STALENESS_WINDOW_MS
+def next_other_wallet_print(price_index, instrument, wallet_address, ref_ts, excluded_rfq_ids, copier_side,
+                            latency_ms=COPY_LATENCY_MS):
+    """First taker print in this instrument on copier_side ('buy' = a
+    taker bought, i.e. the ask; 'sell' = the bid), by a wallet other than
+    wallet_address, no earlier than ref_ts + latency_ms and within
+    STALENESS_WINDOW_MS of ref_ts, not sharing an rfq_id this wallet
+    itself used for this instrument (see module docstring -- an RFQ
+    deal's two legs land at an identical pre-agreed price seconds apart).
+    Returns (price, timestamp, index_price) or (None, None, None)."""
+    if instrument not in price_index:
+        return None, None, None
+    timestamps, wallets, prices, rfq_ids, sides, index_prices = price_index[instrument]
+    start = np.searchsorted(timestamps, ref_ts + latency_ms, side="left")
+    cutoff = ref_ts + STALENESS_WINDOW_MS
     for i in range(start, len(timestamps)):
         if timestamps[i] > cutoff:
-            return None, None
-        if wallets[i] == wallet_address:
+            return None, None, None
+        if wallets[i] == wallet_address or sides[i] != copier_side:
             continue
         if rfq_ids[i] and rfq_ids[i] in excluded_rfq_ids:
             continue
-        return prices[i], timestamps[i]
-    return None, None
+        return prices[i], timestamps[i], index_prices[i]
+    return None, None, None
 
 
 def build_spot_price_index(df):
@@ -133,7 +158,7 @@ def load_events(conn):
     return pd.read_sql_query(
         """
         SELECT wallet_address, instrument, asset, option_type, strike, expiry, side, size, price,
-               index_price_usd, rfq_id, timestamp, notional_usd
+               index_price_usd, rfq_id, timestamp, notional_usd, liquidity_role
         FROM options_events
         WHERE wallet_address IS NOT NULL
         """,
@@ -184,16 +209,21 @@ def simulate_copy_trades(df, now_ms):
             continue
 
         excluded_rfqs = own_rfqs.get((wallet, row.instrument), set())
-        entry_price, _ = next_other_wallet_print(price_index, row.instrument, wallet, row.entry_ts, excluded_rfqs)
+        exit_side = "sell" if row.entry_side == "buy" else "buy"
+        entry_price, _, entry_index = next_other_wallet_print(
+            price_index, row.instrument, wallet, row.entry_ts, excluded_rfqs, row.entry_side)
         if entry_price is None or entry_price <= 0:
             excluded_stale[wallet] = excluded_stale.get(wallet, 0) + 1
             continue
+        fee_pct = copy_taker_fee_pct(entry_price, entry_index, entry_price)
 
         if row.is_closed:
-            exit_value, resolved_ts = next_other_wallet_print(price_index, row.instrument, wallet, row.close_ts, excluded_rfqs)
+            exit_value, resolved_ts, exit_index = next_other_wallet_print(
+                price_index, row.instrument, wallet, row.close_ts, excluded_rfqs, exit_side)
             if exit_value is None:
                 excluded_stale[wallet] = excluded_stale.get(wallet, 0) + 1
                 continue
+            fee_pct += copy_taker_fee_pct(exit_value, exit_index, entry_price)
         else:  # expired, net_qty != 0 -- settle via intrinsic value at expiry
             spot = nearest_spot_price(spot_index, row.asset, row.expiry_ms)
             if spot is None:
@@ -206,6 +236,8 @@ def simulate_copy_trades(df, now_ms):
             return_pct = (exit_value - entry_price) / entry_price
         else:
             return_pct = (entry_price - exit_value) / entry_price
+        gross_return_pct = return_pct
+        return_pct -= fee_pct
 
         positions.append({
             "wallet_address": wallet,
@@ -215,6 +247,10 @@ def simulate_copy_trades(df, now_ms):
             "asset": row.asset,
             "option_type": row.option_type,
             "return_pct": return_pct,
+            # additive: pre-fee return and the fee charged, so the cost
+            # drag stays inspectable (return_pct is net of fee_pct).
+            "gross_return_pct": gross_return_pct,
+            "fee_pct": fee_pct,
             # additive -- purely exposing fields already computed above, no
             # change to any existing caller's behavior. Added for
             # scripts/backtest_stop_loss.py, which needs the actual price

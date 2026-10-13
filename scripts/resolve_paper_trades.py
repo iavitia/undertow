@@ -11,14 +11,20 @@ subsequent closing trades. Whether to follow their exits too is a real
 design question deferred until there's enough resolved-trade data to
 reason about it.
 
-Naked-short loss floor (see conversation, replaces the retired live
-poll-triggered stop-loss engine): a sell-side position's return_pct is
-clamped at config.NAKED_SHORT_LOSS_FLOOR_PCT (-100%) -- the same max-loss
-shape as a bought option, modeling a margined position getting liquidated
-the instant its posted margin (the premium collected) is exhausted, rather
-than a live poll trying to catch that exact moment. A buy's loss is
-already naturally bounded at -100% (exit_price can't go below 0), so the
-floor only ever changes anything for sells.
+Naked shorts settle UNCAPPED (see docs/quant-review-2026-10.md): the
+-100%-of-premium loss floor this used to apply (config's retired
+NAKED_SHORT_LOSS_FLOOR_PCT) assumed a short is liquidated once the premium
+collected is exhausted, but real short-option margin is a multiple of the
+premium, so losses run well past -100%. loss_capped is now always written
+as 0; it stays set only on historical rows (see
+scripts/repair_uncap_paper_trade_losses.py).
+
+Fees: mode='simulated' rows are charged the same copier taker fee on entry
+that scripts/backtest_copy_trades.py charges (analysis.pnl.copy_taker_fee_pct,
+priced off the index price nearest entry_ts), so paper results stay
+comparable to the backtest that selected the wallet. Expiry settlement has
+no taker leg, so no exit fee. testnet_order rows are left gross -- they
+carry real fills, and their real fees aren't tracked per row.
 """
 import sys
 import time
@@ -26,8 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from analysis.pnl import intrinsic_value, nearest_index_price
-from config import NAKED_SHORT_LOSS_FLOOR_PCT, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from analysis.pnl import copy_taker_fee_pct, intrinsic_value, nearest_index_price
+from config import SETTLEMENT_FRESHNESS_TOLERANCE_MS
 from db.cloud_conn import get_live_conn
 
 
@@ -49,20 +55,22 @@ def resolve(conn):
 
         if p["side"] == "buy":
             return_pct = (exit_price - p["entry_price"]) / p["entry_price"]
-            loss_capped = 0
         else:
             return_pct = (p["entry_price"] - exit_price) / p["entry_price"]
-            loss_capped = 1 if return_pct < NAKED_SHORT_LOSS_FLOOR_PCT else 0
-            return_pct = max(return_pct, NAKED_SHORT_LOSS_FLOOR_PCT)
+
+        if p["mode"] == "simulated":
+            entry_index, _ = nearest_index_price(conn, p["asset"], p["entry_ts"])
+            if entry_index is not None:
+                return_pct -= copy_taker_fee_pct(p["entry_price"], entry_index, p["entry_price"])
 
         conn.execute(
             """
             UPDATE paper_trades
             SET fill_status = 'resolved', resolved_ts = ?, exit_price = ?, return_pct = ?,
-                pnl_is_estimated = 1, loss_capped = ?
+                pnl_is_estimated = 1, loss_capped = 0
             WHERE id = ?
             """,
-            (expiry_ms, exit_price, return_pct, loss_capped, p["id"]),
+            (expiry_ms, exit_price, return_pct, p["id"]),
         )
         resolved += 1
 

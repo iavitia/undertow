@@ -21,9 +21,9 @@ execution) is a separate, later, explicitly-gated addition.
 Naked shorts are mirrored (not skipped) and held to expiry like every other
 paper trade -- see record_live_marks() below for the live mark/Greeks
 observability (collection only, no longer triggers an early exit -- see
-conversation) and scripts/resolve_paper_trades.py's loss floor
-(config.NAKED_SHORT_LOSS_FLOOR_PCT) for how a naked short's risk is bounded
-instead: at settlement, not via a live poll trying to catch it mid-life."""
+conversation). Naked shorts settle at expiry with their full, uncapped
+loss -- the -100% loss floor that used to bound them was retired as
+unrealistic (see config.py and docs/quant-review-2026-10.md)."""
 import sys
 import time
 from pathlib import Path
@@ -32,31 +32,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analysis.pnl import intrinsic_value, nearest_index_price
 from clients.derive_client import get_ticker
-from config import COPY_STALENESS_WINDOW_MS, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+from config import COPY_LATENCY_MS, COPY_STALENESS_WINDOW_MS, SETTLEMENT_FRESHNESS_TOLERANCE_MS
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
 from scripts.assign_wallet_aliases import assign_missing
 from scripts.live_poll import ingest
 from scripts.resolve_paper_trades import resolve
 
 
-def find_copy_entry_price(conn, instrument, wallet_address, after_ts, own_rfq_ids):
+def find_copy_entry_price(conn, instrument, wallet_address, ref_ts, side, own_rfq_ids, detected_at=None):
     """Live equivalent of backtest_copy_trades.next_other_wallet_print --
-    first trade in this instrument by a DIFFERENT wallet, at or after
-    after_ts, not sharing an rfq_id this wallet itself used for this
-    instrument (the RFQ-artifact exclusion -- see analysis/pnl.py and
-    backtest_copy_trades.py's module docstring for why), within the
-    staleness window. Returns (price, timestamp) of that matched print --
-    NOT the wall-clock time we happened to notice it, since when running
-    against a backlog (or just a slow poll tick) those can differ by a lot
-    and entry_ts should reflect when the copy price actually existed."""
-    cutoff = after_ts + COPY_STALENESS_WINDOW_MS
+    first TAKER print on the copier's side (side='buy': a taker bought, the
+    ask; side='sell': the bid) in this instrument by a DIFFERENT wallet, no
+    earlier than ref_ts + COPY_LATENCY_MS (and never before detected_at,
+    the tick that actually saw the trade), within the staleness window of
+    ref_ts, not sharing an rfq_id this wallet itself used for this
+    instrument (the RFQ-artifact exclusion). The taker+side filter also
+    excludes the counterparty leg of the source wallet's own fill, which
+    used to price 90% of paper entries at the wallet's own price -- see
+    backtest_copy_trades.py's module docstring and
+    docs/quant-review-2026-10.md. Returns (price, timestamp) of that
+    matched print -- NOT the wall-clock time we happened to notice it,
+    since when running against a backlog (or just a slow poll tick) those
+    can differ by a lot and entry_ts should reflect when the copy price
+    actually existed."""
+    earliest = max(ref_ts + COPY_LATENCY_MS, detected_at or 0)
+    cutoff = ref_ts + COPY_STALENESS_WINDOW_MS
     rows = conn.execute(
         """
         SELECT wallet_address, price, rfq_id, timestamp FROM options_events
         WHERE instrument = ? AND timestamp >= ? AND timestamp <= ?
+          AND liquidity_role = 'taker' AND side = ?
         ORDER BY timestamp ASC
         """,
-        (instrument, after_ts, cutoff),
+        (instrument, earliest, cutoff, side),
     ).fetchall()
     for r in rows:
         if r["wallet_address"] == wallet_address:
@@ -248,7 +256,10 @@ def advance_pending_entries(conn):
                 (p["source_wallet_address"], p["instrument"]),
             ).fetchall()
         }
-        price, matched_ts = find_copy_entry_price(conn, p["instrument"], p["source_wallet_address"], entry_ref_ts, own_rfqs)
+        price, matched_ts = find_copy_entry_price(
+            conn, p["instrument"], p["source_wallet_address"], entry_ref_ts, p["side"], own_rfqs,
+            detected_at=p["created_at"],
+        )
 
         if price is not None and price > 0:
             edge = lookup_edge_bucket(conn, p["source_wallet_address"], p["asset"], p["option_type"], p["side"])

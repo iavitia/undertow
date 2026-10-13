@@ -16,6 +16,7 @@ below (intrinsic_value) is the part actually worth sharing across both, and
 is small enough that both already inline it identically; not worth the
 indirection of extracting a two-line function twice-removed from its use.
 """
+from config import COPY_BASE_FEE_USD, COPY_FEE_CAP_OF_PREMIUM, COPY_TAKER_FEE_RATE, HYPOTHETICAL_STAKE_USD
 
 
 def nearest_index_price(conn, asset, ts_ms):
@@ -56,3 +57,19 @@ def intrinsic_value(spot, strike, option_type):
     """European cash-settlement value at expiry: what a call/put is worth
     at a given spot price, ignoring premium already paid/received."""
     return max(spot - strike, 0) if option_type == "call" else max(strike - spot, 0)
+
+
+def copy_taker_fee_pct(fill_price, index_price, entry_price, stake_usd=HYPOTHETICAL_STAKE_USD):
+    """One copier taker leg's fee, as a fraction of the position's entry
+    premium -- directly subtractable from a return-on-premium figure.
+    Shared by scripts/backtest_copy_trades.py and
+    scripts/resolve_paper_trades.py so backtest and paper trading charge
+    the same costs (see config.COPY_BASE_FEE_USD for the calibration).
+
+    The copier is assumed to trade stake_usd of premium at entry, so its
+    size is stake_usd / entry_price contracts; fill_price/index_price are
+    the leg actually being charged (entry or exit). Flat fee + size *
+    min(rate * index, cap * fill_price), divided by the stake."""
+    size = stake_usd / entry_price
+    per_unit = min(COPY_TAKER_FEE_RATE * index_price, COPY_FEE_CAP_OF_PREMIUM * fill_price)
+    return (COPY_BASE_FEE_USD + size * per_unit) / stake_usd

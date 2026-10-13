@@ -75,7 +75,7 @@ def load_events_eth(conn):
     return pd.read_sql_query(
         """
         SELECT wallet_address, instrument, asset, option_type, strike, expiry, side, size, price,
-               index_price_usd, timestamp, rfq_id
+               index_price_usd, timestamp, rfq_id, liquidity_role
         FROM options_events
         WHERE wallet_address IS NOT NULL AND asset = 'ETH'
         """,
@@ -137,8 +137,12 @@ def entry_price_for(price_index, instrument, wallet, entry_ts, own_rfqs):
     # trade, not real price discovery (see conversation -- this is the
     # exact artifact that made one wallet's apparent edge turn out to be
     # a pricing tautology earlier this project).
+    # Every wheel signal is a sell, so the copy price is the next taker-SELL
+    # print (the bid) after COPY_LATENCY_MS -- see backtest_copy_trades'
+    # module docstring for why this also excludes the counterparty leg of
+    # the signal wallet's own orderbook fill.
     excluded = own_rfqs.get((wallet, instrument), set())
-    price, _gap = next_other_wallet_print(price_index, instrument, wallet, entry_ts, excluded)
+    price, _ts, _index = next_other_wallet_print(price_index, instrument, wallet, entry_ts, excluded, "sell")
     return price
 
 

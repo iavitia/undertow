@@ -574,7 +574,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     side TEXT NOT NULL,
     mode TEXT NOT NULL CHECK (mode IN ('simulated', 'testnet_order')),
     intended_price REAL,                    -- the source wallet's own fill price, for reference
-    entry_price REAL,                       -- our copy entry price (simulated: next-other-wallet-print; testnet_order: actual fill)
+    entry_price REAL,                       -- our copy entry price (simulated: next same-side taker print by another wallet, >= COPY_LATENCY_MS after the source trade; testnet_order: actual fill)
     entry_ts INTEGER,
     -- pending_entry: detected, passed both gates below, but no valid
     -- copy-price found yet (real copier's price may not have printed in
@@ -633,15 +633,13 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     testnet_order_id TEXT,
     resolved_ts INTEGER,
     exit_price REAL,
-    return_pct REAL,                        -- return on premium, same convention as copy_trade_backtest -- naked shorts (side='sell') are floored at config.NAKED_SHORT_LOSS_FLOOR_PCT (-100%), see loss_capped
+    return_pct REAL,                        -- return on premium, same convention as copy_trade_backtest, net of the copier taker fee for mode='simulated' (analysis.pnl.copy_taker_fee_pct); naked shorts settle uncapped
     pnl_is_estimated INTEGER NOT NULL DEFAULT 0,
-    -- 1 if this position's settlement math produced a loss worse than
-    -- config.NAKED_SHORT_LOSS_FLOOR_PCT and scripts/resolve_paper_trades.py
-    -- clamped it to the floor instead -- see conversation: replaces the
-    -- retired live stop-loss engine (stopped_out above) with a hard cap
-    -- applied at expiry instead of a live poll trying to catch it early.
-    -- Always 0 for buy-side rows (already naturally capped at -100%, exit
-    -- price can't go below 0).
+    -- HISTORICAL ONLY: 1 if the now-retired -100% naked-short loss floor
+    -- clamped this row's return_pct (see docs/quant-review-2026-10.md --
+    -- the floor understated real short losses). scripts/resolve_paper_trades.py
+    -- always writes 0 now; scripts/repair_uncap_paper_trade_losses.py
+    -- restores the real return on old rows and clears the flag.
     loss_capped INTEGER NOT NULL DEFAULT 0,
     -- What the SOURCE wallet's own position (not our copy) actually
     -- closed at -- see scripts/run_watchlist_agent.py's

@@ -63,6 +63,32 @@ EXECUTION_ENABLED = os.environ.get("EXECUTION_ENABLED", "false").lower() == "tru
 # split earlier in this project's history.
 COPY_STALENESS_WINDOW_MS = 24 * 60 * 60 * 1000  # 24h -- beyond this, not realistically copyable
 
+# Earliest a copier can act after the source wallet's trade -- see
+# docs/quant-review-2026-10.md. Before this existed, the "next print by
+# another wallet" lookup started AT the source trade's own timestamp, and
+# since Derive records every fill as two legs (maker + taker, same
+# source_trade_id, identical price, usually identical timestamp), 85% of
+# backtest copy entries and 90% of live paper entries were priced at the
+# source wallet's OWN fill via its counterparty's leg -- 0s lag, zero
+# slippage, not a price any follower could get. 15 min matches the live
+# agent's tick cadence (worst-case detection delay). The live agent also
+# never prices before the tick that actually detected the trade.
+COPY_LATENCY_MS = 15 * 60 * 1000
+
+# Copier taker-fee model, shared by scripts/backtest_copy_trades.py and
+# scripts/resolve_paper_trades.py via analysis.pnl.copy_taker_fee_pct --
+# Derive's schedule is a flat per-trade fee plus a notional-based rate,
+# with the rate component capped at a fraction of the option's premium.
+# Calibrated against real mainnet taker legs in options_events (see
+# docs/quant-review-2026-10.md): median fee on tiny trades ~$0.53, rate
+# drifted from ~4 bps of notional (2024) to ~1 bps (2026-Q3); 3 bps is a
+# mid-period figure, and ~20-30% of real taker legs hit the 12.5% cap.
+# The flat fee is charged against HYPOTHETICAL_STAKE_USD (the size a copier
+# would actually trade), so at a $10 stake it alone costs 5% per leg.
+COPY_BASE_FEE_USD = 0.50
+COPY_TAKER_FEE_RATE = 0.0003
+COPY_FEE_CAP_OF_PREMIUM = 0.125
+
 # Paper trades store return_pct (return on premium), not a dollar amount --
 # there's no per-trade size/quantity tracked, and raw premiums aren't
 # comparable across instruments (see PROJECT_PLAN.md's Phase 4 sizing
@@ -128,20 +154,16 @@ STOP_MULTIPLE = 1.10
 # same resilience already used for "no index price at all yet."
 SETTLEMENT_FRESHNESS_TOLERANCE_MS = 30 * 60 * 1000
 
-# Replaces the live stop-loss engine above: instead of trying to catch a
-# naked short's deterioration mid-life via a polled mark price (unreliable
-# on short-dated, high-gamma contracts -- see STOP_MULTIPLE's comment),
-# every naked short is now held to expiry like every other paper trade, and
-# its realized loss is simply floored at 100% of the premium collected --
-# the same max-loss shape as a bought option (lose everything at risk,
-# never more). Models the real-world equivalent of a margined position
-# being liquidated the instant posted margin (the premium collected) is
-# exhausted, rather than us trying to catch that exact moment ourselves.
-# Applied in scripts/resolve_paper_trades.py at settlement, not live --
-# short-dated naked shorts stay in play for fast turnover (see
-# conversation: needed for eventually testing a small, $100-scale live
-# account), they just can't realize worse than this floor.
-NAKED_SHORT_LOSS_FLOOR_PCT = -1.0
+# NAKED_SHORT_LOSS_FLOOR_PCT (-100% of premium) was RETIRED -- see
+# docs/quant-review-2026-10.md. It clamped every naked short's settlement
+# loss at the premium collected, on the theory that a margined position is
+# liquidated once the premium is exhausted. It isn't: short-option margin
+# is a multiple of the premium (largely a % of the underlying), so real
+# losses run well past -100% before any liquidation. The floor hid 31% of
+# paper-trading short losses (worst uncapped trade: -15x premium).
+# scripts/resolve_paper_trades.py now settles naked shorts uncapped;
+# paper_trades.loss_capped is kept only for historical rows (see
+# scripts/repair_uncap_paper_trade_losses.py).
 
 # Derive public REST is rate limited per-IP at 10 TPS with 5x burst.
 DERIVE_REQUEST_DELAY_SECONDS = 0.15

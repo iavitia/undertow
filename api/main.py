@@ -1043,9 +1043,10 @@ def paper_trades_summary():
     outcome and count toward win_rate/total_return -- excluding either
     would hide cut losses and make the track record look artificially
     rosy. resolved_count/stopped_out_count are still reported separately
-    so it's visible how positions actually ended. loss_capped_count is the
-    replacement mechanism's footprint: how many naked shorts had their
-    settlement return_pct floored at config.NAKED_SHORT_LOSS_FLOOR_PCT."""
+    so it's visible how positions actually ended. loss_capped_count counts
+    historical naked shorts whose return_pct is still floored at -100% by
+    the since-retired loss floor (new settlements are uncapped; it drops to
+    0 once scripts/repair_uncap_paper_trade_losses.py --apply has run)."""
     conn = get_cloud_conn()
     completed = conn.execute("SELECT * FROM paper_trades WHERE fill_status IN ('resolved', 'stopped_out')").fetchall()
     resolved_count = conn.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE fill_status = 'resolved'").fetchone()["n"]

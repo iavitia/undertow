@@ -9,3 +9,7 @@ dashboard/dist/
 *.log
 .DS_Store
 .claude/
+
+# local-only research write-ups and analysis scripts
+docs/
+scripts/analysis/

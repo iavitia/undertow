@@ -28,10 +28,12 @@ Removal (see conversation, added after iron-grove-22 sat on the watchlist
 for months after fading -- it had been auto-added under the old, now-
 superseded passes_screen system and this script previously only ever
 added, never removed, so nothing ever caught the degrade): any currently-
-active wallet whose CURRENT tier is qualified_but_faded or does_not_qualify
-gets deactivated. Both mean the same thing from a copier's standpoint --
-this wallet is not currently worth following -- they just differ in
-whether it ever cleared the bar in the first place. This only checks
+active wallet whose CURRENT tier is qualified_but_faded, does_not_qualify,
+or insufficient_data (or that has no qualification row at all) gets
+deactivated. All mean the same thing from a copier's standpoint -- this
+wallet is not currently worth following -- they just differ in whether it
+ever cleared the bar in the first place, or whether enough copyable
+evidence exists to judge it at all. This only checks
 whatever tier is already sitting in wallet_qualification; it does not
 itself recompute anything (see scripts/refresh_qualification.py, which
 requalifies stale wallets and then calls this)."""
@@ -44,12 +46,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import DB_PATH
 
 ACTIVE_WITHIN_DAYS = 30
-DISQUALIFYING_TIERS = ("qualified_but_faded", "does_not_qualify")
+# insufficient_data added after the copy-pricing fix (realistic same-side
+# taker prints + latency + fees, see scripts/backtest_copy_trades.py):
+# 11 active wallets that had qualified under the old own-fill pricing fell
+# below MIN_QUALIFY_N copyable positions -- no valid evidence left for
+# them, so they're removed the same as a wallet that faded.
+DISQUALIFYING_TIERS = ("qualified_but_faded", "does_not_qualify", "insufficient_data")
 
 
 def deactivate_faded(conn):
     """Removes any active watchlist wallet whose current tier has dropped
-    into a disqualifying bucket. Returns the list of aliases removed."""
+    into a disqualifying bucket, or that has no wallet_qualification row
+    at all (zero copyable positions -- build_wallet_qualification.py only
+    writes rows for wallets with at least one). Returns the list of
+    aliases removed."""
     now_ms = int(time.time() * 1000)
     placeholders = ", ".join("?" * len(DISQUALIFYING_TIERS))
     rows = conn.execute(
@@ -57,8 +67,8 @@ def deactivate_faded(conn):
         SELECT wl.wallet_address, w.alias, q.tier, q.forward_wilson_low, q.forward_total_return_pct
         FROM watchlist wl
         LEFT JOIN wallets w ON w.address = wl.wallet_address
-        JOIN wallet_qualification q ON q.wallet_address = wl.wallet_address
-        WHERE wl.is_active = 1 AND q.tier IN ({placeholders})
+        LEFT JOIN wallet_qualification q ON q.wallet_address = wl.wallet_address
+        WHERE wl.is_active = 1 AND (q.tier IN ({placeholders}) OR q.wallet_address IS NULL)
         """,
         DISQUALIFYING_TIERS,
     ).fetchall()
@@ -67,7 +77,8 @@ def deactivate_faded(conn):
     for r in rows:
         wilson_str = f"{r['forward_wilson_low']*100:.1f}%" if r["forward_wilson_low"] is not None else "n/a"
         ret_str = f"{r['forward_total_return_pct']*100:.1f}%" if r["forward_total_return_pct"] is not None else "n/a"
-        reason = f"requalified as {r['tier']}: forward_wilson_low={wilson_str}, forward_total_return_pct={ret_str}"
+        tier = r["tier"] or "no copyable positions"
+        reason = f"requalified as {tier}: forward_wilson_low={wilson_str}, forward_total_return_pct={ret_str}"
         conn.execute(
             "UPDATE watchlist SET is_active = 0, removed_at = ?, removed_reason = ? WHERE wallet_address = ?",
             (now_ms, reason, r["wallet_address"]),

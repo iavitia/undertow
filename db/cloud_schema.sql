@@ -199,3 +199,20 @@ CREATE TABLE IF NOT EXISTS paper_trade_marks (
     dte_days DOUBLE PRECISION
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trade_marks_trade ON paper_trade_marks (paper_trade_id);
+
+-- Row-level security on, with no policies: Supabase exposes every table in
+-- `public` through its REST API to the `anon`/`authenticated` roles, and
+-- without RLS those roles could read (and write) the watchlist and the
+-- trading ledger with nothing but the project URL and public anon key.
+-- Nothing in this project uses that API -- every script connects directly
+-- as `postgres`, which owns these tables and has BYPASSRLS, so this
+-- denies the API roles without affecting the live path.
+ALTER TABLE wallets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE options_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_qualification ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_edge_profile ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paper_trades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paper_trade_marks ENABLE ROW LEVEL SECURITY;

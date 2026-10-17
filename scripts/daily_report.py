@@ -85,6 +85,35 @@ def most_recent_activity(conn, now_ms):
     return (now_ms - r["mx"]) / 3600000
 
 
+WATCHLIST_SILENCE_ALERT_HOURS = 48
+
+
+def watchlist_feed_health(conn, since_ms, now_ms):
+    """(trades ingested from active watchlist wallets in the window, hours
+    since the last one, distinct wallets of any kind trading in the
+    window). The first number going to zero while the third stays high is
+    the signature of the 2026-10-07 incident: Derive's V3 API reported a
+    different `wallet` address for every trader, so 42 wallets that had
+    been trading daily all appeared to stop at once while hundreds of
+    others kept going -- the pipeline ran clean and copied nothing for 10
+    days. Counts only, never addresses."""
+    r = conn.execute(
+        """
+        SELECT COUNT(*) FILTER (WHERE oe.timestamp >= ? AND oe.timestamp < ?) AS n_window,
+               MAX(oe.timestamp) AS last_ts
+        FROM options_events oe JOIN watchlist w ON w.wallet_address = oe.wallet_address
+        WHERE w.is_active = 1
+        """,
+        (since_ms, now_ms),
+    ).fetchone()
+    others = conn.execute(
+        "SELECT COUNT(DISTINCT wallet_address) AS n FROM options_events WHERE timestamp >= ? AND timestamp < ?",
+        (since_ms, now_ms),
+    ).fetchone()
+    hours_since = (now_ms - r["last_ts"]) / 3600000 if r["last_ts"] is not None else None
+    return r["n_window"], hours_since, others["n"]
+
+
 def run(window_hours=WINDOW_HOURS):
     now_ms = int(time.time() * 1000)
     since_ms = now_ms - window_hours * 3600 * 1000
@@ -92,6 +121,7 @@ def run(window_hours=WINDOW_HOURS):
     conn = get_live_conn()
     by_mode_opened, by_mode_resolved = paper_trading_summary(conn, since_ms, now_ms)
     last_activity_h = most_recent_activity(conn, now_ms)
+    wl_trades, wl_silent_h, market_wallets = watchlist_feed_health(conn, since_ms, now_ms)
     conn.close()
 
     print(f"=== Daily report -- trailing {window_hours}h ===\n")
@@ -99,6 +129,13 @@ def run(window_hours=WINDOW_HOURS):
         print("No paper_trades rows exist at all.\n")
     elif last_activity_h > window_hours:
         print(f"NOTE: nothing in this {window_hours}h window, but the most recent activity of ANY kind was {last_activity_h:.1f}h ago -- the pipeline has been idle longer than this window, not just quiet today.\n")
+
+    print("-- Watchlist feed --")
+    silent_str = f"{wl_silent_h:.1f}h ago" if wl_silent_h is not None else "never"
+    print(f"  {wl_trades} trade(s) from active watchlist wallets in window (last one {silent_str}); {market_wallets} distinct wallets traded market-wide")
+    if wl_silent_h is None or wl_silent_h > WATCHLIST_SILENCE_ALERT_HOURS:
+        print(f"  WARNING: no watchlist trade in over {WATCHLIST_SILENCE_ALERT_HOURS}h while the market kept trading -- check that Derive's `wallet` field still matches watchlist addresses before assuming the wallets went quiet")
+    print()
 
     print("-- Paper-trading record (our own DB) --")
     if not by_mode_opened:

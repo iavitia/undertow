@@ -19,6 +19,7 @@ scripts/sync_watchlist_to_cloud.py is the intended way to do that
 day-to-day; this script's job is standing the cloud DB up the first time."""
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -119,6 +120,17 @@ def sync_live_wallets(local, cloud):
         )
     print(f"  wallets: {len(wallets)}")
 
+    # The two candidate cursors are cloud-owned state, never pushed from
+    # local: local's copies stop advancing once the agents run in the cloud
+    # (confirmed 2026-10-17: every active local live_last_checked_ts was
+    # still 2026-09-24), so overwriting cloud's with them rewound the
+    # testnet agent weeks into the past on every sync and made it place
+    # real orders, at current prices, for trades that old. A wallet new to
+    # cloud -- or reactivated after sitting inactive, whose frozen cursor
+    # would replay its whole inactive stretch the same way -- starts at
+    # now: it's copied going forward only. An already-active wallet keeps
+    # cloud's cursors untouched.
+    now_ms = int(time.time() * 1000)
     watchlist_rows = local.execute(f"SELECT * FROM watchlist WHERE wallet_address IN ({placeholders})", addresses).fetchall()
     for r in watchlist_rows:
         cloud.execute(
@@ -129,14 +141,18 @@ def sync_live_wallets(local, cloud):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (wallet_address) DO UPDATE SET
                 added_at = excluded.added_at, source = excluded.source,
-                added_reason = excluded.added_reason, is_active = excluded.is_active,
+                added_reason = excluded.added_reason,
+                last_checked_ts = CASE WHEN watchlist.is_active = 0 AND excluded.is_active = 1
+                                       THEN excluded.last_checked_ts ELSE watchlist.last_checked_ts END,
+                live_last_checked_ts = CASE WHEN watchlist.is_active = 0 AND excluded.is_active = 1
+                                            THEN excluded.live_last_checked_ts ELSE watchlist.live_last_checked_ts END,
+                is_active = excluded.is_active,
                 removed_at = excluded.removed_at, removed_reason = excluded.removed_reason,
-                last_checked_ts = excluded.last_checked_ts,
-                live_last_checked_ts = excluded.live_last_checked_ts, notes = excluded.notes
+                notes = excluded.notes
             """,
             (
                 r["wallet_address"], r["added_at"], r["source"], r["added_reason"], r["is_active"],
-                r["removed_at"], r["removed_reason"], r["last_checked_ts"], r["live_last_checked_ts"], r["notes"],
+                r["removed_at"], r["removed_reason"], now_ms, now_ms, r["notes"],
             ),
         )
     print(f"  watchlist: {len(watchlist_rows)}")

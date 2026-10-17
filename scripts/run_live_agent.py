@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from clients.derive_client import parse_instrument
 from clients.derive_execution_client import (
+    OPTION_FEE_CAP_FRACTION,
     estimate_fee,
     get_account_state,
     get_instrument,
@@ -139,23 +140,26 @@ SUBACCOUNT_CONFIGS = [
         # correctly here avoids that noise rather than relying on
         # place_order()'s try/except to paper over it.
         {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY, "max_margin_utilization_fraction": FAST_MAX_MARGIN_UTILIZATION_FRACTION},
-        # Portfolio Margin, ETH-only, covered strategies -- see
-        # conversation and config.py's comment on the subaccount id.
-        # Fundamentally different from the three above (naked premium
-        # collection): "sides": {"sell"} since buying an option isn't a
-        # covered/secured strategy at all, "sizing": "collateral_coverage"
-        # routes it through _size_for_collateral_coverage() instead of
-        # the fee-only sizing every other config uses (confirmed live
-        # this session: the fee-only sizer has no concept of held
-        # ETH/USDC and could easily size a call past what's actually
-        # covered), and "stop_loss": False since a covered position's
-        # real protection is the held collateral itself, not a buy-back
-        # trigger -- forcing one here could crystallize a loss on the
-        # option while the offsetting gain on held ETH goes uncaptured.
+        # Portfolio Margin, ETH-only, deliberately UNFILTERED (2026-10-17):
+        # copies every ETH trade -- buys and sells -- from validated
+        # wallets at a flat 0.1 ETH (testnet's minimum ETH option size),
+        # to get a raw view of what the signal does before any trade-level
+        # rule shapes it; rules get added back from what that view shows.
+        # So, unlike the configs above: no fee-coverage sizing ("sizing":
+        # "fixed"), no weak-edge gate ("bypass_edge_gate"), no side filter,
+        # and only wallets whose CURRENT tier is validated/high_confidence
+        # ("tiers" -- the watchlist also carries provisional wallets).
+        # "stop_loss": False for the same reason: a stop would close the
+        # position early and hide its real outcome. The margin cap and
+        # per-tick buying-power floor still apply -- capital guards that
+        # keep this small account from being liquidated, not trade filters.
+        # (Formerly a covered-strategy, sell-only config sized by
+        # _size_for_collateral_coverage.)
         {
             "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
             "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
-            "sides": {"sell"}, "sizing": "collateral_coverage", "stop_loss": False,
+            "sizing": "fixed", "fixed_amount": Decimal("0.1"), "bypass_edge_gate": True,
+            "tiers": {"validated", "high_confidence"}, "stop_loss": False,
         },
     ]
     if cfg["subaccount_id"] is not None
@@ -281,7 +285,8 @@ def _size_for_fee_coverage(instrument, limit_price, index_price):
     amount_step = Decimal(instrument["amount_step"])
     minimum = Decimal(instrument["minimum_amount"])
 
-    coefficient = limit_price - MIN_FEE_COVERAGE_MULTIPLE * taker_fee_rate * index_price
+    per_unit_rate_fee = min(taker_fee_rate * index_price, OPTION_FEE_CAP_FRACTION * limit_price)  # see estimate_fee
+    coefficient = limit_price - MIN_FEE_COVERAGE_MULTIPLE * per_unit_rate_fee
     if coefficient <= 0:
         return None  # fee's rate component alone eats the whole premium, at any size
 
@@ -294,7 +299,7 @@ def _size_for_fee_coverage(instrument, limit_price, index_price):
     # trusting the arithmetic blindly -- float/Decimal rounding could in
     # principle leave it one step short.
     premium = float(amount) * limit_price
-    fee = estimate_fee(instrument, amount, index_price)
+    fee = estimate_fee(instrument, amount, index_price, limit_price)
     if premium < MIN_FEE_COVERAGE_MULTIPLE * fee:
         amount += amount_step
 
@@ -473,6 +478,13 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
     return confirmed, still_resting, phantom
 
 
+def _wallet_tier(conn, wallet_address):
+    """The wallet's current wallet_qualification tier, or None if it has
+    no row -- for a config's "tiers" filter (see eth-portfolio)."""
+    row = conn.execute("SELECT tier FROM wallet_qualification WHERE wallet_address = ?", (wallet_address,)).fetchone()
+    return row["tier"] if row else None
+
+
 def run_live_tick(conn):
     """Real-order equivalent of detect_new_positions(): classifies new
     candidates the same way, but for anything that would be a pending
@@ -555,7 +567,11 @@ def run_live_tick(conn):
                 skipped_weak_edge += 1
             except INTEGRITY_ERRORS:
                 pass
-            continue
+            # Still offered to any config that bypasses the gate (see
+            # eth-portfolio) -- the matching filter below keeps it away
+            # from every other config.
+            if not any(cfg.get("bypass_edge_gate") for cfg in SUBACCOUNT_CONFIGS):
+                continue
 
         pending.append((wallet, c, status, edge))
 
@@ -569,11 +585,14 @@ def run_live_tick(conn):
         subaccount_id = config["subaccount_id"]
         max_days = config["max_days_to_expiry"]
         allowed_sides = config.get("sides")
+        allowed_tiers = config.get("tiers")
         matching = [
             item for item in pending
             if item[1]["asset"] in config["assets"]
             and (max_days is None or (item[1]["expiry"] - now_ms / 1000) / 86400 <= max_days)
             and (allowed_sides is None or item[1]["side"] in allowed_sides)
+            and (item[2] == "pending_entry" or config.get("bypass_edge_gate"))
+            and (allowed_tiers is None or _wallet_tier(conn, item[0]) in allowed_tiers)
         ]
         if max_days is not None:
             matching.sort(key=lambda item: item[1]["expiry"])  # soonest-expiry first
@@ -605,11 +624,14 @@ def run_live_tick(conn):
                 skipped_untradeable += 1
                 continue
 
-            amount = _size_for_fee_coverage(instrument, float(mark_price), float(index_price))
-            if amount is None:
-                print(f"{c['instrument']} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
-                skipped_uneconomical += 1
-                continue
+            if config.get("sizing") == "fixed":
+                amount = config["fixed_amount"]  # no fee-coverage rule -- see eth-portfolio's config
+            else:
+                amount = _size_for_fee_coverage(instrument, float(mark_price), float(index_price))
+                if amount is None:
+                    print(f"{c['instrument']} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
+                    skipped_uneconomical += 1
+                    continue
 
             if config.get("sizing") == "collateral_coverage":
                 coverage_cap = _size_for_collateral_coverage(current_states[subaccount_id], instrument, c)
@@ -686,7 +708,7 @@ def run_live_tick(conn):
                 if stop_order_id:
                     stop_note = f", stop-loss {stop_order_id}"
                 elif c["side"] == "sell" and not config.get("stop_loss", True):
-                    stop_note = ", no stop by design (covered strategy)"
+                    stop_note = ", no stop by design"
                 elif c["side"] == "sell":
                     stop_note = ", UNPROTECTED (no stop)"
                 else:

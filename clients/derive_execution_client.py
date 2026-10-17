@@ -35,6 +35,10 @@ from config import DERIVE_ETH_CHAIN, DERIVE_SESSION_KEY, DERIVE_WALLET
 
 EXECUTION_BASE_URL = "https://testnet.api.derive.xyz/v3"
 
+# Derive caps an option trade's rate-based fee at this fraction of the
+# option's value -- see estimate_fee.
+OPTION_FEE_CAP_FRACTION = 0.125
+
 # V3 values -- confirmed against docs.derive.xyz/migrating/breaking-changes
 # and live calls this session (e.g. public/get_margin, public/get_risk_universes
 # both responded correctly using these). DOMAIN_SEPARATOR is per-chain under
@@ -214,23 +218,26 @@ def get_instrument(instrument_name):
     return data["result"]
 
 
-def estimate_fee(instrument, amount, index_price):
+def estimate_fee(instrument, amount, index_price, option_price):
     """Estimated taker fee for a given order size, from the instrument's
-    own base_fee/taker_fee_rate fields (get_instrument's response) --
-    NOT Derive's generic published rate (their help docs say "$0.5 base +
-    0.04% notional"; this environment's real, observed base_fee is ~$1.5,
-    confirmed against three real settled trades this session, each paying
-    $1.50-1.60 on a $0.02-0.91 premium -- the flat component alone
-    exceeded the entire premium at minimum order size). Using the live,
-    instrument-specific field is the number actually charged here, not a
-    generic figure that's already been shown to disagree with reality in
-    this environment. flat + rate*notional, no attempt to replicate the
-    12.5%-of-option-value cap mentioned in Derive's docs -- irrelevant at
-    the trade sizes this project targets, where the flat fee dominates."""
+    own base_fee/taker_fee_rate fields (get_instrument's response), with
+    the rate component capped at OPTION_FEE_CAP_FRACTION of the option's
+    value, per Derive's fee docs.
+
+    The cap is confirmed live (2026-10-17 fee analysis, ~22k mainnet V3
+    fills): on fills where it should bind -- cheap options, where 12.5% of
+    premium is less than the rate times notional -- the capped formula
+    matched 1,056 of 2,018 order-book taker fills vs 59 for the uncapped
+    one. Leaving it out overstated exactly the cheap-option fees that the
+    fee-coverage rule then rejected (a BTC option needed ~$122 of premium
+    to clear 5x instead of ~$33). V3's base_fee is $0.50 (was ~$1.50 under
+    V2); testnet in practice charges no base fee at all, so this stays
+    conservative there -- it's the listed mainnet schedule a new account
+    would pay."""
     base_fee = float(instrument["base_fee"])
     taker_fee_rate = float(instrument["taker_fee_rate"])
     notional = float(amount) * float(index_price)
-    return base_fee + taker_fee_rate * notional
+    return base_fee + min(taker_fee_rate * notional, OPTION_FEE_CAP_FRACTION * float(option_price) * float(amount))
 
 
 def get_ticker(instrument_name):

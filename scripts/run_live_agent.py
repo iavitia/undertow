@@ -149,17 +149,18 @@ SUBACCOUNT_CONFIGS = [
         # "fixed"), no weak-edge gate ("bypass_edge_gate"), no side filter,
         # and only wallets whose CURRENT tier is validated/high_confidence
         # ("tiers" -- the watchlist also carries provisional wallets).
-        # "stop_loss": False for the same reason: a stop would close the
-        # position early and hide its real outcome. The margin cap and
-        # per-tick buying-power floor still apply -- capital guards that
-        # keep this small account from being liquidated, not trade filters.
-        # (Formerly a covered-strategy, sell-only config sized by
-        # _size_for_collateral_coverage.)
+        # Capital protection stays on, since the point of this account is
+        # to see whether a small wallet can build a portfolio efficiently,
+        # not to ride a losing short many multiples underwater or get
+        # liquidated: naked shorts get the same exchange-side stop-loss as
+        # prime (STOP_LOSS_MULTIPLE), and the margin cap and per-tick
+        # buying-power floor still apply. (Formerly a covered-strategy,
+        # sell-only config sized by _size_for_collateral_coverage.)
         {
             "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
             "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
             "sizing": "fixed", "fixed_amount": Decimal("0.1"), "bypass_edge_gate": True,
-            "tiers": {"validated", "high_confidence"}, "stop_loss": False,
+            "tiers": {"validated", "high_confidence"},
         },
     ]
     if cfg["subaccount_id"] is not None

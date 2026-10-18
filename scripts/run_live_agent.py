@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from clients.derive_client import get_ticker as get_mainnet_ticker  # read-only, for _mainnet_shadow_entry
 from clients.derive_client import parse_instrument
 from clients.derive_execution_client import (
     OPTION_FEE_CAP_FRACTION,
@@ -67,6 +68,7 @@ from config import (
     EXECUTION_ENABLED,
 )
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
+from scripts.resolve_paper_trades import resolve_mainnet_shadows
 from scripts.run_watchlist_agent import find_new_candidates
 
 # All three assets, both sides, are eligible for real execution -- BTC/ETH
@@ -158,13 +160,17 @@ SUBACCOUNT_CONFIGS = [
         # buying-power floor still apply. "snap_strike": testnet doesn't
         # list most short-dated $25-spaced ETH strikes these wallets trade,
         # so the nearest listed strike on the same expiry is traded
-        # instead (see snap_to_listed_strike). (Formerly a covered-strategy,
+        # instead (see snap_to_listed_strike). "mainnet_shadow": every order
+        # also records what it would have cost on mainnet, settled to a
+        # mainnet-estimated result at expiry (see _mainnet_shadow_entry),
+        # since testnet's free base fee and thin book flatter the testnet
+        # result. (Formerly a covered-strategy,
         # sell-only config sized by _size_for_collateral_coverage.)
         {
             "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
             "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
             "sizing": "fixed", "fixed_amount": Decimal("0.1"), "bypass_edge_gate": True,
-            "tiers": {"validated", "high_confidence"}, "snap_strike": True,
+            "tiers": {"validated", "high_confidence"}, "snap_strike": True, "mainnet_shadow": True,
         },
     ]
     if cfg["subaccount_id"] is not None
@@ -517,6 +523,30 @@ def snap_to_listed_strike(instrument_name, listed_names, index_price):
     return snapped_name, None
 
 
+def _mainnet_shadow_entry(instrument_name, side, amount, instrument):
+    """For configs with "mainnet_shadow" (see eth-portfolio): what the same
+    order would have cost on MAINNET right now, so a testnet result can be
+    set beside a mainnet-realistic one. Testnet flatters on two counts --
+    it charges no base fee, and its thin book decides fills that mainnet
+    liquidity would have made -- so this assumes a taker fill at mainnet's
+    best bid (sell) or ask (buy), charged the listed mainnet fee schedule
+    (instrument fee params are identical across environments, confirmed
+    2026-10-17). Returns (entry_price, fee_per_unit, note); entry_price is
+    None when mainnet has no quote on that side, which itself means the
+    order couldn't have been filled there as a taker."""
+    try:
+        ticker = get_mainnet_ticker(instrument_name)
+    except Exception as e:
+        return None, None, f"mainnet ticker failed: {str(e)[:120]}"
+    price = ticker.get("best_bid_price") if side == "sell" else ticker.get("best_ask_price")
+    index_price = ticker.get("index_price")
+    if not price or float(price) <= 0 or not index_price:
+        return None, None, f"no mainnet {'bid' if side == 'sell' else 'ask'} at entry"
+    price, index_price = float(price), float(index_price)
+    fee_per_unit = estimate_fee(instrument, amount, index_price, price) / float(amount)
+    return price, fee_per_unit, None
+
+
 def _wallet_tier(conn, wallet_address):
     """The wallet's current wallet_qualification tier, or None if it has
     no row -- for a config's "tiers" filter (see eth-portfolio)."""
@@ -713,6 +743,10 @@ def run_live_tick(conn):
                 skipped_margin_cap += 1
                 continue
 
+            shadow_price, shadow_fee, shadow_note = (
+                _mainnet_shadow_entry(traded, c["side"], amount, instrument) if config.get("mainnet_shadow") else (None, None, None)
+            )
+
             try:
                 order_result = place_order(
                     instrument_name=traded,
@@ -756,15 +790,17 @@ def run_live_tick(conn):
                         (source_wallet_address, source_event_id, instrument, asset, option_type, strike, expiry,
                          side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
                          margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
-                         edge_bucket_median_return_pct, created_at, subaccount_id, source_instrument)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         edge_bucket_median_return_pct, created_at, subaccount_id, source_instrument,
+                         shadow_entry_price, shadow_fee_per_unit, shadow_note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (wallet, c["id"], traded, c["asset"], c["option_type"], parse_instrument(traded)["strike"], c["expiry"],
                      c["side"], c["price"], entry_price, now_ms, order["order_id"],
                      margin,
                      edge["n"] if edge else None, edge["win_rate"] if edge else None,
                      edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
-                     now_ms, subaccount_id, c["instrument"] if traded != c["instrument"] else None),
+                     now_ms, subaccount_id, c["instrument"] if traded != c["instrument"] else None,
+                     shadow_price, shadow_fee, shadow_note),
                 )
                 placed += 1
                 if stop_order_id:
@@ -792,11 +828,13 @@ def run():
     conn.execute("PRAGMA busy_timeout = 8000")
 
     placed, skipped_weak_edge, skipped_wrong_asset, skipped_uneconomical, skipped_untradeable, skipped_margin_cap = run_live_tick(conn)
+    shadows_resolved = resolve_mainnet_shadows(conn)
 
     print(
         f"placed {placed} real order(s), skipped {skipped_weak_edge} weak-edge, "
         f"skipped {skipped_wrong_asset} ineligible asset/side, skipped {skipped_uneconomical} uneconomical, "
-        f"skipped {skipped_untradeable} untradeable-on-testnet, skipped {skipped_margin_cap} over the margin cap"
+        f"skipped {skipped_untradeable} untradeable-on-testnet, skipped {skipped_margin_cap} over the margin cap, "
+        f"settled {shadows_resolved} mainnet-shadow estimate(s)"
     )
     conn.close()
 

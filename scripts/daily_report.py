@@ -19,7 +19,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from clients.derive_execution_client import get_open_orders, get_trade_history
-from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_FAST, DERIVE_SUBACCOUNT_ID_SOL
+from config import (
+    DERIVE_SUBACCOUNT_ID,
+    DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO,
+    DERIVE_SUBACCOUNT_ID_FAST,
+    DERIVE_SUBACCOUNT_ID_SOL,
+)
 from db.cloud_conn import get_live_conn
 
 WINDOW_HOURS = 24
@@ -114,6 +119,35 @@ def watchlist_feed_health(conn, since_ms, now_ms):
     return r["n_window"], hours_since, others["n"]
 
 
+def eth_portfolio_vs_mainnet(conn):
+    """eth-portfolio's testnet result beside its mainnet-shadow estimate,
+    all time (see run_live_agent._mainnet_shadow_entry). Testnet returns
+    are gross and only exist for orders testnet actually filled; shadow
+    returns are net of mainnet fees and exist for every order mainnet
+    could have filled as a taker, including ones testnet never filled.
+    The like-for-like gap is computed only on rows where both resolved."""
+    if DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO is None:
+        return None
+    return conn.execute(
+        """
+        SELECT COUNT(*) AS orders,
+               COUNT(*) FILTER (WHERE fill_status = 'never_filled') AS never_filled,
+               COUNT(*) FILTER (WHERE shadow_entry_price IS NOT NULL) AS shadow_quoted,
+               COUNT(*) FILTER (WHERE fill_status = 'resolved') AS tn_n,
+               AVG(return_pct) FILTER (WHERE fill_status = 'resolved') AS tn_avg,
+               COUNT(*) FILTER (WHERE fill_status = 'resolved' AND return_pct > 0) AS tn_wins,
+               COUNT(*) FILTER (WHERE shadow_return_pct IS NOT NULL) AS sh_n,
+               AVG(shadow_return_pct) AS sh_avg,
+               COUNT(*) FILTER (WHERE shadow_return_pct > 0) AS sh_wins,
+               COUNT(*) FILTER (WHERE fill_status = 'resolved' AND shadow_return_pct IS NOT NULL) AS both_n,
+               AVG(return_pct - shadow_return_pct) FILTER (WHERE fill_status = 'resolved' AND shadow_return_pct IS NOT NULL) AS gap_avg
+        FROM paper_trades
+        WHERE mode = 'testnet_order' AND subaccount_id = ? AND fill_status <> 'skipped_weak_edge'
+        """,
+        (DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO,),
+    ).fetchone()
+
+
 def run(window_hours=WINDOW_HOURS):
     now_ms = int(time.time() * 1000)
     since_ms = now_ms - window_hours * 3600 * 1000
@@ -122,6 +156,7 @@ def run(window_hours=WINDOW_HOURS):
     by_mode_opened, by_mode_resolved = paper_trading_summary(conn, since_ms, now_ms)
     last_activity_h = most_recent_activity(conn, now_ms)
     wl_trades, wl_silent_h, market_wallets = watchlist_feed_health(conn, since_ms, now_ms)
+    eth_pf = eth_portfolio_vs_mainnet(conn)
     conn.close()
 
     print(f"=== Daily report -- trailing {window_hours}h ===\n")
@@ -151,6 +186,15 @@ def run(window_hours=WINDOW_HOURS):
         avg_ret = (sum(r for r in returns if r is not None) / n * 100) if n else None
         avg_str = f"{avg_ret:.1f}%" if avg_ret is not None else "n/a"
         print(f"  {mode}: {n} resolved, {wins}/{n} wins, avg return/trade={avg_str}")
+
+    if eth_pf is not None:
+        pct = lambda v: f"{v * 100:.1f}%" if v is not None else "n/a"
+        print("\n-- eth-portfolio: testnet vs mainnet estimate (all time) --")
+        print(f"  {eth_pf['orders']} order(s): {eth_pf['never_filled']} never filled on testnet, {eth_pf['shadow_quoted']} had a mainnet quote to fill against")
+        print(f"  testnet actual (gross):        {eth_pf['tn_n']} resolved, {eth_pf['tn_wins']} wins, avg return/trade {pct(eth_pf['tn_avg'])}")
+        print(f"  mainnet estimate (net of fees): {eth_pf['sh_n']} resolved, {eth_pf['sh_wins']} wins, avg return/trade {pct(eth_pf['sh_avg'])}")
+        if eth_pf["both_n"]:
+            print(f"  same {eth_pf['both_n']} trade(s) resolved on both: testnet beats the mainnet estimate by {pct(eth_pf['gap_avg'])} per trade on average")
 
     print("\n-- Real exchange record (Derive's own data, ground truth) --")
     real = real_exchange_summary(since_ms, now_ms)

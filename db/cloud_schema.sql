@@ -180,6 +180,16 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     -- wallet did (run_live_agent.snap_to_listed_strike): the wallet's own
     -- instrument, while `instrument`/`strike` hold the one actually held.
     source_instrument TEXT,
+    -- Mainnet-shadow estimate for configs with "mainnet_shadow"
+    -- (run_live_agent._mainnet_shadow_entry): a taker fill at mainnet's
+    -- bid/ask with mainnet's fee schedule, settled at expiry by
+    -- resolve_paper_trades.resolve_mainnet_shadows. shadow_note says why
+    -- there's no estimate (e.g. no mainnet quote on that side).
+    shadow_entry_price DOUBLE PRECISION,
+    shadow_fee_per_unit DOUBLE PRECISION,
+    shadow_exit_price DOUBLE PRECISION,
+    shadow_return_pct DOUBLE PRECISION,
+    shadow_note TEXT,
     UNIQUE (source_event_id, subaccount_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trades_wallet ON paper_trades (source_wallet_address);

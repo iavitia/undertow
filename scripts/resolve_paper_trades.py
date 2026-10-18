@@ -78,6 +78,46 @@ def resolve(conn):
     return resolved
 
 
+def resolve_mainnet_shadows(conn):
+    """Settles each row's mainnet-shadow estimate (shadow_* columns, written
+    by run_live_agent._mainnet_shadow_entry for configs with
+    "mainnet_shadow") once its instrument has expired: same expiry
+    settlement as resolve() above, net of the mainnet fee charged at entry.
+
+    Deliberately independent of fill_status: a testnet order that never
+    filled on testnet's thin book still gets a shadow result, because on
+    mainnet a taker order at the bid/ask would have filled -- whether the
+    trade happens shouldn't depend on testnet liquidity. Same held-to-
+    expiry simplification as resolve(); a stop-loss exit isn't modelled
+    on either side."""
+    now_ms = int(time.time() * 1000)
+    rows = conn.execute(
+        """
+        SELECT * FROM paper_trades
+        WHERE shadow_entry_price IS NOT NULL AND shadow_return_pct IS NULL AND expiry * 1000 <= ?
+        """,
+        (now_ms,),
+    ).fetchall()
+
+    resolved = 0
+    for p in rows:
+        spot, gap_ms = nearest_index_price(conn, p["asset"], p["expiry"] * 1000)
+        if spot is None or gap_ms > SETTLEMENT_FRESHNESS_TOLERANCE_MS:
+            continue  # same retry-next-run rule as resolve()
+        exit_price = intrinsic_value(spot, p["strike"], p["option_type"])
+        entry = p["shadow_entry_price"]
+        gross = (exit_price - entry) if p["side"] == "buy" else (entry - exit_price)
+        shadow_return_pct = (gross - p["shadow_fee_per_unit"]) / entry
+        conn.execute(
+            "UPDATE paper_trades SET shadow_exit_price = ?, shadow_return_pct = ? WHERE id = ?",
+            (exit_price, shadow_return_pct, p["id"]),
+        )
+        resolved += 1
+
+    conn.commit()
+    return resolved
+
+
 def run():
     conn = get_live_conn()
     n = resolve(conn)

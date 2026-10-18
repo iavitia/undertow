@@ -469,6 +469,85 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, 
     return margin_used / total_value
 
 
+# How close a mainnet quote must be to a testnet stop's fill time to stand
+# in for mainnet's price at that moment -- see _mainnet_quote_near.
+SHADOW_EXIT_QUOTE_TOLERANCE_MS = 30 * 60 * 1000
+
+
+def _mainnet_quote_near(conn, row, ts_ms, now_ms):
+    """Mainnet's price to close `row` around ts_ms, for the mainnet-shadow
+    exit when its testnet stop fires: the ask to buy back a short, the bid
+    to sell a long. Prefers the paper_trade_marks snapshot nearest ts_ms
+    (the watchlist agent records mainnet quotes for open shorts every
+    tick), else mainnet's live quote when ts_ms is recent. Returns
+    (price, index_price, how) or (None, None, reason)."""
+    want = "best_ask_price" if row["side"] == "sell" else "best_bid_price"
+    mark = conn.execute(
+        f"SELECT ts, {want} AS quote, mark_price, index_price FROM paper_trade_marks WHERE paper_trade_id = ? ORDER BY ABS(ts - ?) LIMIT 1",
+        (row["id"], ts_ms),
+    ).fetchone()
+    if mark and abs(mark["ts"] - ts_ms) <= SHADOW_EXIT_QUOTE_TOLERANCE_MS and mark["index_price"]:
+        if mark["quote"]:
+            return float(mark["quote"]), float(mark["index_price"]), "recorded mainnet quote nearest the stop"
+        if mark["mark_price"]:
+            return float(mark["mark_price"]), float(mark["index_price"]), "recorded mainnet mark nearest the stop (no quote on that side)"
+    if now_ms - ts_ms <= SHADOW_EXIT_QUOTE_TOLERANCE_MS:
+        try:
+            ticker = get_mainnet_ticker(row["instrument"])
+            quote = ticker.get("best_ask_price" if row["side"] == "sell" else "best_bid_price")
+            if quote and ticker.get("index_price"):
+                return float(quote), float(ticker["index_price"]), "live mainnet quote just after the stop"
+        except Exception as e:
+            return None, None, f"no mainnet quote near the stop (ticker failed: {str(e)[:80]})"
+    return None, None, "no mainnet quote near the stop"
+
+
+def _record_stop_exit(conn, row, entry_price, entry_amount, stop_legs):
+    """Records a real position closed by its exchange-side stop-loss:
+    fill_status 'stopped_out' at the stop's actual fill price, rather than
+    the row settling at expiry as though it had been held. Without this
+    every stopped-out short was scored as held to expiry.
+
+    The mainnet shadow (if any) exits at the same moment: mainnet's price
+    then (see _mainnet_quote_near), less mainnet's fee on the closing
+    trade. If no mainnet quote is close enough in time, the shadow is left
+    unscored with the reason in shadow_note -- not settled as if held."""
+    exit_amount = sum(float(t["trade_amount"]) for t in stop_legs)
+    exit_price = sum(float(t["trade_price"]) * float(t["trade_amount"]) for t in stop_legs) / exit_amount
+    exit_ts = max(int(t["timestamp"]) for t in stop_legs)
+    gross = (entry_price - exit_price) if row["side"] == "sell" else (exit_price - entry_price)
+    note = f"stopped out: {exit_amount:g} of {entry_amount:g} closed by its stop-loss at {exit_price:g}"
+    if exit_amount < entry_amount - 1e-9:
+        note += " (PARTIAL -- the rest is still open on Derive)"
+    conn.execute(
+        """
+        UPDATE paper_trades
+        SET fill_status = 'stopped_out', exit_price = ?, resolved_ts = ?, return_pct = ?, pnl_is_estimated = 0, notes = ?
+        WHERE id = ?
+        """,
+        (exit_price, exit_ts, gross / entry_price, note, row["id"]),
+    )
+
+    if row["shadow_entry_price"] is None or row["shadow_return_pct"] is not None:
+        return
+    quote, index_price, how = _mainnet_quote_near(conn, row, exit_ts, int(time.time() * 1000))
+    if quote is None:
+        conn.execute("UPDATE paper_trades SET shadow_note = ? WHERE id = ?", (f"stopped out on testnet; {how}", row["id"]))
+        return
+    try:
+        exit_fee_per_unit = estimate_fee(get_instrument(row["instrument"]), exit_amount, index_price, quote) / exit_amount
+    except Exception as e:
+        conn.execute("UPDATE paper_trades SET shadow_note = ? WHERE id = ?", (f"stopped out on testnet; fee lookup failed: {str(e)[:80]}", row["id"]))
+        return
+    shadow_entry = row["shadow_entry_price"]
+    shadow_gross = (shadow_entry - quote) if row["side"] == "sell" else (quote - shadow_entry)
+    conn.execute(
+        "UPDATE paper_trades SET shadow_exit_price = ?, shadow_return_pct = ?, shadow_note = ? WHERE id = ?",
+        (quote, (shadow_gross - row["shadow_fee_per_unit"] - exit_fee_per_unit) / shadow_entry,
+         f"exited when the testnet stop fired; {how}", row["id"]),
+    )
+
+
 def reconcile_open_orders(conn, subaccount_id, now_ms):
     """Checks every mode='testnet_order' row this subaccount currently has
     marked fill_status='open' against Derive's own real state -- see
@@ -486,20 +565,23 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
         get_trade_history) -- entry_price corrected to the real
         weighted-average fill price rather than the originally intended
         limit price, fill_status stays 'open' (genuinely pending
-        settlement at the instrument's own expiry, same as before).
+        settlement at the instrument's own expiry, same as before) --
+        unless its stop-loss has filled too, in which case the exit is
+        recorded and the row becomes 'stopped_out' (see
+        _record_stop_exit).
       - still resting (shows up in get_open_orders, not yet matched) --
         left untouched, genuinely still pending a decision.
       - neither -- fill_status flips to 'never_filled' so it stops being
         treated as real exposure and drops out of every win-rate/return
         aggregate the same way skipped_* rows already do.
 
-    Returns (confirmed, still_resting, phantom) counts."""
+    Returns (confirmed, still_resting, phantom, stopped_out) counts."""
     open_rows = conn.execute(
-        "SELECT id, testnet_order_id, created_at FROM paper_trades WHERE mode = 'testnet_order' AND fill_status = 'open' AND subaccount_id = ?",
+        "SELECT * FROM paper_trades WHERE mode = 'testnet_order' AND fill_status = 'open' AND subaccount_id = ?",
         (subaccount_id,),
     ).fetchall()
     if not open_rows:
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
     since_ms = min(r["created_at"] for r in open_rows) - 3600000  # 1h buffer for clock skew
     resting_ids = {o["order_id"] for o in get_open_orders(subaccount_id).get("orders", [])}
@@ -516,7 +598,14 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
             break
         page += 1
 
-    confirmed = still_resting = phantom = 0
+    # For the stop-exit fallback below: which open rows hold each
+    # instrument, and which order ids are entries (never exits).
+    rows_by_instrument = {}
+    for row in open_rows:
+        rows_by_instrument.setdefault(row["instrument"], []).append(row)
+    entry_order_ids = {row["testnet_order_id"] for row in open_rows}
+
+    confirmed = still_resting = phantom = stopped_out = 0
     for row in open_rows:
         oid = row["testnet_order_id"]
         if oid in fills_by_order:
@@ -528,6 +617,24 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
                 (avg_price, f"reconciled at {now_ms}: confirmed real fill, {len(legs)} leg(s)", row["id"]),
             )
             confirmed += 1
+
+            # Did its stop-loss fire? Matched by the stored stop order id;
+            # failing that, by a fill in the same instrument on the
+            # opposite side after the entry -- the agent never closes a
+            # position any other way -- but only when this row is the sole
+            # open row in that instrument, so a fill can't be pinned on
+            # the wrong trade.
+            stop_legs = fills_by_order.get(row["stop_order_id"]) if row["stop_order_id"] else None
+            if not stop_legs and len(rows_by_instrument[row["instrument"]]) == 1:
+                entry_ts = max(int(t["timestamp"]) for t in legs)
+                stop_legs = [
+                    t for order_id, ts in fills_by_order.items() if order_id not in entry_order_ids
+                    for t in ts
+                    if t["instrument_name"] == row["instrument"] and t["direction"] != row["side"] and int(t["timestamp"]) > entry_ts
+                ] or None
+            if stop_legs:
+                _record_stop_exit(conn, row, avg_price, total_amount, stop_legs)
+                stopped_out += 1
         elif oid in resting_ids:
             still_resting += 1
         else:
@@ -537,7 +644,7 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
             )
             phantom += 1
     conn.commit()
-    return confirmed, still_resting, phantom
+    return confirmed, still_resting, phantom, stopped_out
 
 
 # How far a snapped strike may sit from the one the wallet traded, as a
@@ -641,9 +748,9 @@ def run_live_tick(conn):
     subaccount_ids = {cfg["subaccount_id"] for cfg in SUBACCOUNT_CONFIGS}
 
     for sid in subaccount_ids:
-        confirmed, still_resting, phantom = reconcile_open_orders(conn, sid, now_ms)
-        if confirmed or still_resting or phantom:
-            print(f"reconciled subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled (flipped to never_filled)")
+        confirmed, still_resting, phantom, stopped = reconcile_open_orders(conn, sid, now_ms)
+        if confirmed or still_resting or phantom or stopped:
+            print(f"reconciled subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled (flipped to never_filled), {stopped} stopped out")
 
     current_states = {sid: get_account_state(sid) for sid in subaccount_ids}
     for sid in subaccount_ids:
@@ -846,8 +953,8 @@ def run_live_tick(conn):
                          side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
                          margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
                          edge_bucket_median_return_pct, created_at, subaccount_id, source_instrument,
-                         shadow_entry_price, shadow_fee_per_unit, shadow_note)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         shadow_entry_price, shadow_fee_per_unit, shadow_note, stop_order_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (wallet, c["id"], traded, c["asset"], c["option_type"], parse_instrument(traded)["strike"], c["expiry"],
                      c["side"], c["price"], entry_price, now_ms, order["order_id"],
@@ -855,7 +962,7 @@ def run_live_tick(conn):
                      edge["n"] if edge else None, edge["win_rate"] if edge else None,
                      edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
                      now_ms, subaccount_id, c["instrument"] if traded != c["instrument"] else None,
-                     shadow_price, shadow_fee, shadow_note),
+                     shadow_price, shadow_fee, shadow_note, stop_order_id),
                 )
                 placed += 1
                 if stop_order_id:

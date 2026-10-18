@@ -10,27 +10,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_FAST, DERIVE_SUBACCOUNT_ID_SOL
+from config import (
+    DERIVE_SUBACCOUNT_ID,
+    DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO,
+    DERIVE_SUBACCOUNT_ID_FAST,
+    DERIVE_SUBACCOUNT_ID_SOL,
+)
 from db.cloud_conn import get_live_conn
 from scripts.run_live_agent import reconcile_open_orders
 
 SUBACCOUNT_IDS = [
-    sid for sid in (DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_SOL, DERIVE_SUBACCOUNT_ID_FAST) if sid is not None
+    sid for sid in (DERIVE_SUBACCOUNT_ID, DERIVE_SUBACCOUNT_ID_SOL, DERIVE_SUBACCOUNT_ID_FAST, DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO)
+    if sid is not None
 ]
 
 
 def run():
     now_ms = int(time.time() * 1000)
     conn = get_live_conn()
-    total_confirmed = total_resting = total_phantom = 0
+    total_confirmed = total_resting = total_phantom = total_stopped = 0
     for sid in SUBACCOUNT_IDS:
-        confirmed, still_resting, phantom = reconcile_open_orders(conn, sid, now_ms)
-        print(f"subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled")
+        confirmed, still_resting, phantom, stopped = reconcile_open_orders(conn, sid, now_ms)
+        print(f"subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled, {stopped} stopped out")
         total_confirmed += confirmed
         total_resting += still_resting
         total_phantom += phantom
+        total_stopped += stopped
     conn.close()
-    print(f"\ntotal: {total_confirmed} confirmed, {total_resting} still resting, {total_phantom} flipped to never_filled")
+    print(f"\ntotal: {total_confirmed} confirmed, {total_resting} still resting, {total_phantom} flipped to never_filled, {total_stopped} stopped out")
 
 
 if __name__ == "__main__":

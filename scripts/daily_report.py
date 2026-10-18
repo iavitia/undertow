@@ -133,14 +133,14 @@ def eth_portfolio_vs_mainnet(conn):
         SELECT COUNT(*) AS orders,
                COUNT(*) FILTER (WHERE fill_status = 'never_filled') AS never_filled,
                COUNT(*) FILTER (WHERE shadow_entry_price IS NOT NULL) AS shadow_quoted,
-               COUNT(*) FILTER (WHERE fill_status = 'resolved') AS tn_n,
-               AVG(return_pct) FILTER (WHERE fill_status = 'resolved') AS tn_avg,
-               COUNT(*) FILTER (WHERE fill_status = 'resolved' AND return_pct > 0) AS tn_wins,
+               COUNT(*) FILTER (WHERE fill_status IN ('resolved', 'stopped_out')) AS tn_n,
+               AVG(return_pct) FILTER (WHERE fill_status IN ('resolved', 'stopped_out')) AS tn_avg,
+               COUNT(*) FILTER (WHERE fill_status IN ('resolved', 'stopped_out') AND return_pct > 0) AS tn_wins,
                COUNT(*) FILTER (WHERE shadow_return_pct IS NOT NULL) AS sh_n,
                AVG(shadow_return_pct) AS sh_avg,
                COUNT(*) FILTER (WHERE shadow_return_pct > 0) AS sh_wins,
-               COUNT(*) FILTER (WHERE fill_status = 'resolved' AND shadow_return_pct IS NOT NULL) AS both_n,
-               AVG(return_pct - shadow_return_pct) FILTER (WHERE fill_status = 'resolved' AND shadow_return_pct IS NOT NULL) AS gap_avg
+               COUNT(*) FILTER (WHERE fill_status IN ('resolved', 'stopped_out') AND shadow_return_pct IS NOT NULL) AS both_n,
+               AVG(return_pct - shadow_return_pct) FILTER (WHERE fill_status IN ('resolved', 'stopped_out') AND shadow_return_pct IS NOT NULL) AS gap_avg
         FROM paper_trades
         WHERE mode = 'testnet_order' AND subaccount_id = ? AND fill_status <> 'skipped_weak_edge'
         """,
@@ -191,8 +191,8 @@ def run(window_hours=WINDOW_HOURS):
         pct = lambda v: f"{v * 100:.1f}%" if v is not None else "n/a"
         print("\n-- eth-portfolio: testnet vs mainnet estimate (all time) --")
         print(f"  {eth_pf['orders']} order(s): {eth_pf['never_filled']} never filled on testnet, {eth_pf['shadow_quoted']} had a mainnet quote to fill against")
-        print(f"  testnet actual (gross):        {eth_pf['tn_n']} resolved, {eth_pf['tn_wins']} wins, avg return/trade {pct(eth_pf['tn_avg'])}")
-        print(f"  mainnet estimate (net of fees): {eth_pf['sh_n']} resolved, {eth_pf['sh_wins']} wins, avg return/trade {pct(eth_pf['sh_avg'])}")
+        print(f"  testnet actual (gross):        {eth_pf['tn_n']} resolved or stopped out, {eth_pf['tn_wins']} wins, avg return/trade {pct(eth_pf['tn_avg'])}")
+        print(f"  mainnet estimate (net of fees): {eth_pf['sh_n']} resolved or stopped out, {eth_pf['sh_wins']} wins, avg return/trade {pct(eth_pf['sh_avg'])}")
         if eth_pf["both_n"]:
             print(f"  same {eth_pf['both_n']} trade(s) resolved on both: testnet beats the mainnet estimate by {pct(eth_pf['gap_avg'])} per trade on average")
 

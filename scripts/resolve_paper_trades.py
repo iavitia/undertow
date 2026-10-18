@@ -87,14 +87,15 @@ def resolve_mainnet_shadows(conn):
     Deliberately independent of fill_status: a testnet order that never
     filled on testnet's thin book still gets a shadow result, because on
     mainnet a taker order at the bid/ask would have filled -- whether the
-    trade happens shouldn't depend on testnet liquidity. Same held-to-
-    expiry simplification as resolve(); a stop-loss exit isn't modelled
-    on either side."""
+    trade happens shouldn't depend on testnet liquidity. A row whose
+    testnet stop fired is skipped: run_live_agent._record_stop_exit gives
+    its shadow a matching exit at that moment instead."""
     now_ms = int(time.time() * 1000)
     rows = conn.execute(
         """
         SELECT * FROM paper_trades
         WHERE shadow_entry_price IS NOT NULL AND shadow_return_pct IS NULL AND expiry * 1000 <= ?
+          AND fill_status <> 'stopped_out'
         """,
         (now_ms,),
     ).fetchall()

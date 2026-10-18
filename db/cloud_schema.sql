@@ -190,6 +190,10 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     shadow_exit_price DOUBLE PRECISION,
     shadow_return_pct DOUBLE PRECISION,
     shadow_note TEXT,
+    -- The exchange-side stop-loss attached to a real short, so
+    -- reconciliation can recognise its fill and record the exit
+    -- (fill_status 'stopped_out') instead of settling as if held to expiry.
+    stop_order_id TEXT,
     UNIQUE (source_event_id, subaccount_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trades_wallet ON paper_trades (source_wallet_address);

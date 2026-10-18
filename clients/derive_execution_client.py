@@ -197,6 +197,27 @@ def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM"
     return data["result"]
 
 
+_session_key_expiry_sec = None
+
+
+def get_session_key_expiry_sec():
+    """Unix expiry of the session key this module signs with, from
+    /private/session_keys (cached per process). Every signed action has to
+    expire before it does -- Derive rejects an order whose signature
+    outlives the key (error 14038), which bounds how long a trigger order
+    can sit on the book. When the key itself expires, nothing here can
+    trade until a new one is registered."""
+    global _session_key_expiry_sec
+    if _session_key_expiry_sec is None:
+        signer = Account.from_key(DERIVE_SESSION_KEY).address.lower()
+        keys = _private_post("/private/session_keys", {"wallet": DERIVE_WALLET}).get("public_session_keys", [])
+        mine = [k for k in keys if str(k.get("public_session_key", "")).lower() == signer]
+        if not mine:
+            raise RuntimeError("signing session key not found among the wallet's registered session keys")
+        _session_key_expiry_sec = int(float(mine[0]["expiry_sec"]))
+    return _session_key_expiry_sec
+
+
 def get_active_option_names(currency):
     """Public, no auth needed -- names of every active option testnet
     currently lists for one currency (e.g. "ETH"). Testnet lists far fewer
@@ -398,6 +419,14 @@ def place_order(
         order_params["trigger_price"] = str(Decimal(str(trigger_price)).quantize(tick_size))
         order_params["trigger_price_type"] = trigger_price_type
     return _private_post("/private/order", order_params)
+
+
+def get_trigger_orders(subaccount_id):
+    """Untriggered conditional (e.g. stop-loss) orders for one subaccount.
+    These are NOT returned by get_open_orders -- confirmed live 2026-10-18,
+    when a subaccount at Derive's trigger-order limit showed no trigger
+    orders there at all."""
+    return _private_post("/private/get_trigger_orders", {"subaccount_id": subaccount_id}).get("orders", [])
 
 
 def cancel_trigger_order(order_id, subaccount_id):

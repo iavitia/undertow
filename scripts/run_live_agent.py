@@ -50,13 +50,16 @@ from clients.derive_client import get_ticker as get_mainnet_ticker  # read-only,
 from clients.derive_client import parse_instrument
 from clients.derive_execution_client import (
     OPTION_FEE_CAP_FRACTION,
+    cancel_trigger_order,
     estimate_fee,
     get_account_state,
     get_active_option_names,
     get_instrument,
     get_open_orders,
+    get_session_key_expiry_sec,
     get_ticker,
     get_trade_history,
+    get_trigger_orders,
     place_order,
     simulate_margin,
 )
@@ -220,12 +223,20 @@ STOP_LOSS_MULTIPLE = 1.5
 # premium vs. the no-stop floor's 100%), while generous enough to
 # reliably fill near the intended trigger.
 STOP_LOSS_LIMIT_BUFFER = 0.25
-# Derive-confirmed live bounds on a trigger order's signature_expiry_sec
-# (a plain order's usual 10-minute window gets rejected outright for one)
-# -- a trigger order can sit dormant for a while before firing, so its
-# signature has to outlive that.
-MIN_TRIGGER_SIGNATURE_WINDOW_SEC = 51877
+# Bounds on a trigger order's signature_expiry_sec, confirmed live
+# 2026-10-18 (a plain order's usual 10-minute window gets rejected outright
+# for one). The LOWER bound isn't a constant: Derive requires the signature
+# to outlive the option itself ("must be between 257199 and 7776000 sec
+# from now" for an option 71.4h from expiry). The old fixed 51877s minimum
+# was one option's remaining life read off an earlier error, and setting
+# the signature to end exactly at expiry fell just short -- so every stop
+# was rejected and real naked shorts sat unprotected. The upper bound is
+# this fixed 90 days, and also the signing session key's own expiry
+# (error 14038) -- see _attach_stop_loss.
 MAX_TRIGGER_SIGNATURE_WINDOW_SEC = 7776000
+# Kept between the signature's expiry and the session key's, so clock skew
+# can't push the signature past the key.
+SESSION_KEY_EXPIRY_MARGIN_SEC = 3600
 
 
 def _attach_stop_loss(instrument_name, subaccount_id, entry_price, amount, expiry_sec, now_sec):
@@ -233,14 +244,23 @@ def _attach_stop_loss(instrument_name, subaccount_id, entry_price, amount, expir
     just-opened real naked short -- see STOP_LOSS_MULTIPLE's comment.
     reduce_only=True so a stop that ever fires after the position's
     already closed some other way safely no-ops instead of opening a new
-    long. Returns the stop order's id, or None if the position expires
-    too soon to even get a valid trigger signature window (see
-    MIN_TRIGGER_SIGNATURE_WINDOW_SEC) -- logged either way, never silently
-    dropped, since an entry placed without its stop is a real gap, not a
-    routine skip."""
-    window = min(expiry_sec, now_sec + MAX_TRIGGER_SIGNATURE_WINDOW_SEC) - now_sec
-    if window < MIN_TRIGGER_SIGNATURE_WINDOW_SEC:
-        print(f"  {instrument_name} expires in {window / 3600:.1f}h -- too soon for a trigger order's minimum signature window, left UNPROTECTED")
+    long. Returns the stop order's id, or None if no valid stop can be
+    placed -- logged either way, never silently dropped, since an entry
+    placed without its stop is a real gap, not a routine skip.
+
+    The signature runs as long as allowed -- 90 days, or until shortly
+    before the signing session key expires, whichever is sooner -- because
+    Derive requires it to outlive the option (see
+    MAX_TRIGGER_SIGNATURE_WINDOW_SEC). An option that outlives that limit
+    can't get a stop at all."""
+    try:
+        key_limit_sec = get_session_key_expiry_sec() - SESSION_KEY_EXPIRY_MARGIN_SEC
+    except Exception as e:
+        print(f"  WARNING: couldn't read the session key's expiry, so {instrument_name} is left UNPROTECTED: {e}")
+        return None
+    signature_expiry_sec = min(now_sec + MAX_TRIGGER_SIGNATURE_WINDOW_SEC, key_limit_sec)
+    if signature_expiry_sec <= expiry_sec:
+        print(f"  {instrument_name} expires after the longest valid stop signature (90 days, or the session key's expiry) -- left UNPROTECTED")
         return None
 
     trigger_price = STOP_LOSS_MULTIPLE * entry_price
@@ -256,7 +276,7 @@ def _attach_stop_loss(instrument_name, subaccount_id, entry_price, amount, expir
             trigger_type="stoploss",
             trigger_price=trigger_price,
             trigger_price_type="mark",
-            signature_expiry_sec=now_sec + window,
+            signature_expiry_sec=signature_expiry_sec,
         )
         stop_order_id = stop_result["order"]["order_id"]
         print(f"  attached stop-loss {stop_order_id} for {instrument_name} -- triggers at mark>=${trigger_price:.2f} ({STOP_LOSS_MULTIPLE}x entry)")
@@ -264,6 +284,37 @@ def _attach_stop_loss(instrument_name, subaccount_id, entry_price, amount, expir
     except Exception as e:
         print(f"  WARNING: stop-loss attach FAILED for {instrument_name} -- position is UNPROTECTED: {e}")
         return None
+
+
+def _cancel_orphaned_stops(subaccount_id, state):
+    """Cancels this subaccount's stop orders that no longer guard anything:
+    no open position and no resting entry order in their instrument.
+    That's the normal fate of a stop attached to an entry that never
+    filled (most testnet entries don't). Being reduce-only, an orphaned
+    stop could never act -- but each one counts against Derive's small
+    per-subaccount trigger-order limit (about 5), and once that's full
+    every new stop is rejected and new shorts go out unprotected
+    (confirmed live 2026-10-18: four stale stops on prime blocked a new
+    one). Returns the number cancelled; a failure is logged, never fatal."""
+    try:
+        stops = get_trigger_orders(subaccount_id)
+        if not stops:
+            return 0
+        held = {p["instrument_name"] for p in state.get("positions", []) if float(p.get("amount") or 0) != 0}
+        resting = {o["instrument_name"] for o in get_open_orders(subaccount_id).get("orders", [])}
+    except Exception as e:
+        print(f"couldn't check subaccount {subaccount_id} for orphaned stops: {e}")
+        return 0
+    cancelled = 0
+    for stop in stops:
+        if stop["instrument_name"] in held or stop["instrument_name"] in resting:
+            continue
+        try:
+            cancel_trigger_order(stop["order_id"], subaccount_id)
+            cancelled += 1
+        except Exception as e:
+            print(f"couldn't cancel orphaned stop {stop['order_id']} ({stop['instrument_name']}): {e}")
+    return cancelled
 
 
 def _size_for_fee_coverage(instrument, limit_price, index_price):
@@ -595,6 +646,10 @@ def run_live_tick(conn):
             print(f"reconciled subaccount {sid}: {confirmed} confirmed real, {still_resting} still resting, {phantom} never filled (flipped to never_filled)")
 
     current_states = {sid: get_account_state(sid) for sid in subaccount_ids}
+    for sid in subaccount_ids:
+        n = _cancel_orphaned_stops(sid, current_states[sid])
+        if n:
+            print(f"subaccount {sid}: cancelled {n} orphaned stop-loss order(s) that no longer guarded a position or resting entry")
     buying_power_floors = {
         sid: float(state.get("initial_margin") or 0) * MIN_BUYING_POWER_FRACTION
         for sid, state in current_states.items()

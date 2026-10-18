@@ -197,6 +197,31 @@ def simulate_margin(simulated_positions, simulated_collaterals, margin_type="SM"
     return data["result"]
 
 
+def get_active_option_names(currency):
+    """Public, no auth needed -- names of every active option testnet
+    currently lists for one currency (e.g. "ETH"). Testnet lists far fewer
+    short-dated strikes than mainnet (confirmed 2026-10-18: ETH Oct 20 had
+    12 testnet strikes vs 27 on mainnet, Oct 21 none at all), so a
+    mainnet-copied instrument often doesn't exist here -- see
+    scripts/run_live_agent.snap_to_listed_strike."""
+    names, page = set(), 1
+    while True:
+        resp = requests.post(
+            f"{EXECUTION_BASE_URL}/public/get_all_instruments",
+            json={"currency": currency, "instrument_type": "option", "expired": False, "page": page, "page_size": 1000},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(data["error"])
+        result = data["result"]
+        names |= {i["instrument_name"] for i in result["instruments"] if i.get("is_active", True)}
+        if page >= result.get("pagination", {}).get("num_pages", 1):
+            return names
+        page += 1
+
+
 def get_instrument(instrument_name):
     """Public, no auth needed -- the base_asset_address/base_asset_sub_id a
     real order's TradeModuleData needs. Confirmed live this session: the

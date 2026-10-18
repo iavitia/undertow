@@ -389,10 +389,15 @@ def check_wallet_outcomes(conn):
 
     updated = 0
     for p in candidates:
+        # A testnet row whose strike was snapped to one testnet lists (see
+        # run_live_agent.snap_to_listed_strike) holds a different
+        # instrument than the wallet traded; the wallet's own outcome is
+        # always measured on the wallet's instrument and strike.
+        source_instrument = p["source_instrument"] if "source_instrument" in p.keys() else None
         legs = conn.execute(
             "SELECT side, size, price, timestamp, asset, strike, option_type FROM options_events "
             "WHERE wallet_address = ? AND instrument = ? ORDER BY timestamp",
-            (p["source_wallet_address"], p["instrument"]),
+            (p["source_wallet_address"], source_instrument or p["instrument"]),
         ).fetchall()
         if not legs:
             continue
@@ -412,7 +417,7 @@ def check_wallet_outcomes(conn):
         elif p["expiry"] * 1000 <= now_ms:
             spot, gap_ms = nearest_index_price(conn, p["asset"], p["expiry"] * 1000)
             if spot is not None and gap_ms <= SETTLEMENT_FRESHNESS_TOLERANCE_MS:
-                wallet_exit_price = intrinsic_value(spot, p["strike"], p["option_type"])
+                wallet_exit_price = intrinsic_value(spot, legs[0]["strike"], p["option_type"])
                 wallet_pnl_is_estimated = 1
             # else: no sample close enough to the real expiry moment to trust yet -- recheck next tick
         # else: wallet's own position still open and unexpired -- recheck next tick

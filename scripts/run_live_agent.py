@@ -51,6 +51,7 @@ from clients.derive_execution_client import (
     OPTION_FEE_CAP_FRACTION,
     estimate_fee,
     get_account_state,
+    get_active_option_names,
     get_instrument,
     get_open_orders,
     get_ticker,
@@ -154,13 +155,16 @@ SUBACCOUNT_CONFIGS = [
         # not to ride a losing short many multiples underwater or get
         # liquidated: naked shorts get the same exchange-side stop-loss as
         # prime (STOP_LOSS_MULTIPLE), and the margin cap and per-tick
-        # buying-power floor still apply. (Formerly a covered-strategy,
+        # buying-power floor still apply. "snap_strike": testnet doesn't
+        # list most short-dated $25-spaced ETH strikes these wallets trade,
+        # so the nearest listed strike on the same expiry is traded
+        # instead (see snap_to_listed_strike). (Formerly a covered-strategy,
         # sell-only config sized by _size_for_collateral_coverage.)
         {
             "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
             "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
             "sizing": "fixed", "fixed_amount": Decimal("0.1"), "bypass_edge_gate": True,
-            "tiers": {"validated", "high_confidence"},
+            "tiers": {"validated", "high_confidence"}, "snap_strike": True,
         },
     ]
     if cfg["subaccount_id"] is not None
@@ -479,6 +483,40 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
     return confirmed, still_resting, phantom
 
 
+# How far a snapped strike may sit from the one the wallet traded, as a
+# fraction of spot -- see snap_to_listed_strike.
+MAX_STRIKE_SNAP_FRACTION = 0.02
+
+
+def snap_to_listed_strike(instrument_name, listed_names, index_price):
+    """For configs with "snap_strike" (see eth-portfolio): testnet lists far
+    fewer short-dated strikes than mainnet, so the instrument a wallet
+    traded often doesn't exist here. Returns (instrument_to_trade, None),
+    or (None, reason) when nothing acceptable is listed.
+
+    The instrument itself if testnet lists it; otherwise the listed strike
+    nearest to it on the same expiry and option type, a tie going to the
+    one further out of the money (higher strike for a call, lower for a
+    put: less likely to be hit as a short, cheaper as a buy). No snap
+    across expiries, and none beyond MAX_STRIKE_SNAP_FRACTION of spot."""
+    if instrument_name in listed_names:
+        return instrument_name, None
+    asset, expiry, strike_str, option_type = instrument_name.split("-")
+    strike = float(strike_str)
+    same_series = []
+    for name in listed_names:
+        a, e, k, t = name.split("-")
+        if a == asset and e == expiry and t == option_type:
+            same_series.append((float(k), name))
+    if not same_series:
+        return None, f"testnet lists no {expiry} {option_type} expiry"
+    otm_direction = 1 if option_type == "C" else -1
+    snapped_strike, snapped_name = min(same_series, key=lambda kn: (abs(kn[0] - strike), -otm_direction * kn[0]))
+    if abs(snapped_strike - strike) > MAX_STRIKE_SNAP_FRACTION * index_price:
+        return None, f"nearest testnet strike {snapped_strike:g} is more than {MAX_STRIKE_SNAP_FRACTION:.0%} of spot from {strike:g}"
+    return snapped_name, None
+
+
 def _wallet_tier(conn, wallet_address):
     """The wallet's current wallet_qualification tier, or None if it has
     no row -- for a config's "tiers" filter (see eth-portfolio)."""
@@ -532,6 +570,7 @@ def run_live_tick(conn):
         for sid, state in current_states.items()
     }
     low_buying_power = {sid: False for sid in subaccount_ids}
+    listed_by_asset = {}  # testnet's option listings, fetched at most once per asset per tick (see snap_strike)
 
     # find_new_candidates() already fully materializes its result (and
     # commits the watchlist cursor advance) before returning -- safe to
@@ -604,24 +643,46 @@ def run_live_tick(conn):
                 skipped_untradeable += 1
                 continue
 
+            # The instrument actually traded: the candidate's own, unless
+            # this config snaps to a strike testnet lists (see
+            # snap_to_listed_strike). Everything from here on -- pricing,
+            # margin, the order, its stop, the DB row -- uses this one;
+            # the row keeps the wallet's original in source_instrument.
+            traded = c["instrument"]
+            if config.get("snap_strike"):
+                try:
+                    if c["asset"] not in listed_by_asset:
+                        listed_by_asset[c["asset"]] = get_active_option_names(c["asset"])
+                except Exception as e:
+                    print(f"testnet instrument listing failed for {c['asset']}, skipping {c['instrument']} on {config['name']}: {e}")
+                    skipped_untradeable += 1
+                    continue
+                traded, reason = snap_to_listed_strike(c["instrument"], listed_by_asset[c["asset"]], float(c["index_price_usd"]))
+                if traded is None:
+                    print(f"{c['instrument']} skipped on {config['name']} -- {reason}")
+                    skipped_untradeable += 1
+                    continue
+                if traded != c["instrument"]:
+                    print(f"{c['instrument']} snapped to {traded} on {config['name']} (nearest strike testnet lists)")
+
             try:
-                instrument = get_instrument(c["instrument"])
+                instrument = get_instrument(traded)
             except Exception as e:
-                print(f"{c['instrument']} not tradeable on testnet, skipping: {e}")
+                print(f"{traded} not tradeable on testnet, skipping: {e}")
                 skipped_untradeable += 1
                 continue
 
             try:
-                ticker = get_ticker(c["instrument"])
+                ticker = get_ticker(traded)
             except Exception as e:
-                print(f"{c['instrument']} ticker fetch failed, skipping: {e}")
+                print(f"{traded} ticker fetch failed, skipping: {e}")
                 skipped_untradeable += 1
                 continue
 
             mark_price = ticker.get("mark_price")
             index_price = ticker.get("index_price")
             if not mark_price or float(mark_price) <= 0 or not index_price:
-                print(f"{c['instrument']} has no live testnet price yet, skipping")
+                print(f"{traded} has no live testnet price yet, skipping")
                 skipped_untradeable += 1
                 continue
 
@@ -630,38 +691,38 @@ def run_live_tick(conn):
             else:
                 amount = _size_for_fee_coverage(instrument, float(mark_price), float(index_price))
                 if amount is None:
-                    print(f"{c['instrument']} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
+                    print(f"{traded} can't clear {MIN_FEE_COVERAGE_MULTIPLE}x fee coverage even at {MAX_SIZE_MULTIPLE}x minimum size, skipping")
                     skipped_uneconomical += 1
                     continue
 
             if config.get("sizing") == "collateral_coverage":
                 coverage_cap = _size_for_collateral_coverage(current_states[subaccount_id], instrument, c)
                 if coverage_cap is None or coverage_cap < amount:
-                    print(f"{c['instrument']} skipped on {config['name']} -- fee-minimum size {amount} would exceed available collateral coverage ({coverage_cap}), not placing a partially-naked position")
+                    print(f"{traded} skipped on {config['name']} -- fee-minimum size {amount} would exceed available collateral coverage ({coverage_cap}), not placing a partially-naked position")
                     skipped_uneconomical += 1
                     continue
 
             try:
-                utilization = _margin_utilization_after(current_states[subaccount_id], c["instrument"], c["side"], amount, c["asset"])
+                utilization = _margin_utilization_after(current_states[subaccount_id], traded, c["side"], amount, c["asset"])
             except Exception as e:
-                print(f"{c['instrument']} margin simulation failed, skipping: {e}")
+                print(f"{traded} margin simulation failed, skipping: {e}")
                 skipped_untradeable += 1
                 continue
             if utilization > config["max_margin_utilization_fraction"]:
-                print(f"{c['instrument']} skipped on {config['name']} -- would push margin utilization to {utilization:.1%}, over the {config['max_margin_utilization_fraction']:.0%} cap")
+                print(f"{traded} skipped on {config['name']} -- would push margin utilization to {utilization:.1%}, over the {config['max_margin_utilization_fraction']:.0%} cap")
                 skipped_margin_cap += 1
                 continue
 
             try:
                 order_result = place_order(
-                    instrument_name=c["instrument"],
+                    instrument_name=traded,
                     direction=c["side"],
                     amount=amount,
                     limit_price=mark_price,
                     subaccount_id=subaccount_id,
                 )
             except Exception as e:
-                print(f"order placement failed for {c['instrument']} on {config['name']}, skipping: {e}")
+                print(f"order placement failed for {traded} on {config['name']}, skipping: {e}")
                 skipped_untradeable += 1
                 continue
 
@@ -671,7 +732,7 @@ def run_live_tick(conn):
             stop_order_id = None
             if c["side"] == "sell" and config.get("stop_loss", True):
                 stop_order_id = _attach_stop_loss(
-                    instrument_name=c["instrument"],
+                    instrument_name=traded,
                     subaccount_id=subaccount_id,
                     entry_price=entry_price,
                     amount=amount,
@@ -681,7 +742,7 @@ def run_live_tick(conn):
 
             state = get_account_state(subaccount_id)
             current_states[subaccount_id] = state
-            margin = _margin_for_instrument(state, c["instrument"])
+            margin = _margin_for_instrument(state, traded)
 
             current_buying_power = float(state.get("initial_margin") or 0)
             if current_buying_power < buying_power_floors[subaccount_id]:
@@ -695,15 +756,15 @@ def run_live_tick(conn):
                         (source_wallet_address, source_event_id, instrument, asset, option_type, strike, expiry,
                          side, mode, intended_price, entry_price, entry_ts, fill_status, testnet_order_id,
                          margin_required_usd, edge_bucket_n, edge_bucket_win_rate, edge_bucket_wilson_low,
-                         edge_bucket_median_return_pct, created_at, subaccount_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+                         edge_bucket_median_return_pct, created_at, subaccount_id, source_instrument)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'testnet_order', ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (wallet, c["id"], c["instrument"], c["asset"], c["option_type"], c["strike"], c["expiry"],
+                    (wallet, c["id"], traded, c["asset"], c["option_type"], parse_instrument(traded)["strike"], c["expiry"],
                      c["side"], c["price"], entry_price, now_ms, order["order_id"],
                      margin,
                      edge["n"] if edge else None, edge["win_rate"] if edge else None,
                      edge["wilson_low"] if edge else None, edge["median_return_pct"] if edge else None,
-                     now_ms, subaccount_id),
+                     now_ms, subaccount_id, c["instrument"] if traded != c["instrument"] else None),
                 )
                 placed += 1
                 if stop_order_id:
@@ -714,7 +775,7 @@ def run_live_tick(conn):
                     stop_note = ", UNPROTECTED (no stop)"
                 else:
                     stop_note = ""
-                print(f"placed real order {order['order_id']} for {c['instrument']} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}{stop_note}")
+                print(f"placed real order {order['order_id']} for {traded} ({c['side']}) on {config['name']} (subaccount {subaccount_id}), margin=${margin}{stop_note}")
             except INTEGRITY_ERRORS:
                 pass
 

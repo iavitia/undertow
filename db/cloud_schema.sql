@@ -176,6 +176,10 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     -- Part of the UNIQUE pair (not source_event_id alone) so the same
     -- candidate can get a real row on more than one subaccount.
     subaccount_id INTEGER NOT NULL DEFAULT 0,
+    -- Set only when a testnet order traded a different strike than the
+    -- wallet did (run_live_agent.snap_to_listed_strike): the wallet's own
+    -- instrument, while `instrument`/`strike` hold the one actually held.
+    source_instrument TEXT,
     UNIQUE (source_event_id, subaccount_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trades_wallet ON paper_trades (source_wallet_address);

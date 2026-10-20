@@ -13,7 +13,9 @@ name: Live agent (real testnet orders)
 # best-effort with no SLA and was confirmed firing every 6-7h instead of
 # the configured 15 min, and at one point got stuck re-running a stale
 # commit for days. Supabase's pg_cron (same project as CLOUD_DATABASE_URL)
-# now calls this workflow's `dispatches` API endpoint every 15 min instead
+# now calls this workflow's `dispatches` API endpoint every 5 min instead
+# (every 15 until 2026-10-20; a tick takes ~1.5-3 min end to end, so 5
+# leaves room, while faster would start queueing runs behind each other)
 # -- `workflow_dispatch`-triggered runs aren't subject to the same
 # scheduling delay, confirmed firing within seconds of the cron tick.
 

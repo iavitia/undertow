@@ -148,9 +148,13 @@ SUBACCOUNT_CONFIGS = [
         {"name": "fast", "subaccount_id": DERIVE_SUBACCOUNT_ID_FAST, "assets": {"BTC", "ETH"}, "max_days_to_expiry": FAST_MAX_DAYS_TO_EXPIRY, "max_margin_utilization_fraction": FAST_MAX_MARGIN_UTILIZATION_FRACTION},
         # Portfolio Margin, ETH-only, deliberately UNFILTERED (2026-10-17):
         # copies every ETH trade -- buys and sells -- from validated
-        # wallets at a flat 0.1 ETH (testnet's minimum ETH option size),
-        # to get a raw view of what the signal does before any trade-level
-        # rule shapes it; rules get added back from what that view shows.
+        # wallets at a flat 0.2 ETH, to get a raw view of what the signal
+        # does before any trade-level rule shapes it; rules get added back
+        # from what that view shows. 0.2, not testnet's 0.1 minimum: the
+        # first settled mainnet-shadow estimates (2026-10-20) showed two
+        # shorts that expired worthless still losing after fees, since
+        # mainnet's mostly-flat ~$0.55 fee exceeded their premium at 0.1
+        # (fees were 82% of premium across the first six trades; 46% at 0.2).
         # So, unlike the configs above: no fee-coverage sizing ("sizing":
         # "fixed"), no weak-edge gate ("bypass_edge_gate"), no side filter,
         # and only wallets whose CURRENT tier is validated/high_confidence
@@ -172,7 +176,7 @@ SUBACCOUNT_CONFIGS = [
         {
             "name": "eth-portfolio", "subaccount_id": DERIVE_SUBACCOUNT_ID_ETH_PORTFOLIO, "assets": {"ETH"},
             "max_days_to_expiry": None, "max_margin_utilization_fraction": PRIME_MAX_MARGIN_UTILIZATION_FRACTION,
-            "sizing": "fixed", "fixed_amount": Decimal("0.1"), "bypass_edge_gate": True,
+            "sizing": "fixed", "fixed_amount": Decimal("0.2"), "bypass_edge_gate": True,
             "tiers": {"validated", "high_confidence"}, "snap_strike": True, "mainnet_shadow": True,
         },
     ]
@@ -196,6 +200,16 @@ MAX_SIZE_MULTIPLE = 20
 # start -- a simple backstop against one tick overcommitting the account,
 # independent of and in addition to per-trade sizing.
 MIN_BUYING_POWER_FRACTION = 0.5
+
+# How long a real entry order rests on the book before Derive expires it
+# (its signature expiry). Was place_order()'s default 10 minutes, and
+# testnet's thin books almost never matched a limit at the mark that fast:
+# all 31 entries placed 2026-10-18 to 10-20 expired unfilled.
+# Two hours is a starting point, to be tuned against the fill rate it
+# produces -- long enough to give the book a chance, short enough that a
+# fill still reflects the signal. Capped a few minutes before the option's
+# own expiry (see _entry_signature_expiry).
+ENTRY_ORDER_LIFETIME_SEC = 2 * 3600
 
 # Loss-limiting for real naked shorts -- see conversation. The old live
 # stop-loss engine (config.STOP_MULTIPLE = 1.10, a 10% loss trigger) only
@@ -428,7 +442,29 @@ def _margin_for_instrument(state, instrument_name):
     return None
 
 
-def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, asset):
+def _entry_signature_expiry(now_sec, option_expiry_sec):
+    """Signature expiry for a real entry order: ENTRY_ORDER_LIFETIME_SEC
+    from now, but no later than 5 minutes before the option itself expires.
+    None (place_order's default 10-minute window) when that leaves less
+    than Derive's own minimum of just over 5 minutes."""
+    expiry = min(now_sec + ENTRY_ORDER_LIFETIME_SEC, int(option_expiry_sec) - 300)
+    return expiry if expiry >= now_sec + 360 else None
+
+
+def _resting_entries(subaccount_id):
+    """{instrument: signed unfilled amount} for this subaccount's resting
+    (unfilled) orders, negative for sells -- see
+    _margin_utilization_after for why these count toward the cap."""
+    resting = {}
+    for o in get_open_orders(subaccount_id).get("orders", []):
+        remaining = float(o.get("amount") or 0) - float(o.get("filled_amount") or 0)
+        if remaining > 0:
+            signed = remaining if o["direction"] == "buy" else -remaining
+            resting[o["instrument_name"]] = resting.get(o["instrument_name"], 0.0) + signed
+    return resting
+
+
+def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, asset, resting=None):
     """What fraction of total account value (collaterals_initial_margin)
     would be committed as margin if this candidate were added on top of
     every real position currently open, per simulate_margin(). Checked
@@ -443,12 +479,19 @@ def _margin_utilization_after(state, new_instrument_name, new_side, new_amount, 
     endpoint can price an Alt-universe instrument at all, even though the
     real SOL subaccount is itself Standard Margin (see
     simulate_margin's docstring for why that's a safe, conservative
-    stand-in rather than an exact match)."""
+    stand-in rather than an exact match).
+
+    resting ({instrument: signed amount}, see _resting_entries) is counted
+    as if already filled. Entries now rest for hours (ENTRY_ORDER_LIFETIME_SEC),
+    so several can be on the book at once, each able to fill; counting
+    only filled positions would let the account commit well past the cap."""
     simulated_positions = {}
     for p in state.get("positions", []):
         amt = float(p.get("amount") or 0)
         if amt != 0:
             simulated_positions[p["instrument_name"]] = amt
+    for instrument_name, amt in (resting or {}).items():
+        simulated_positions[instrument_name] = simulated_positions.get(instrument_name, 0.0) + amt
     delta = float(new_amount) if new_side == "buy" else -float(new_amount)
     simulated_positions[new_instrument_name] = simulated_positions.get(new_instrument_name, 0.0) + delta
 
@@ -555,10 +598,10 @@ def reconcile_open_orders(conn, subaccount_id, now_ms):
     after place_order() returned an order_id, so a row could sit marked
     'open' indefinitely regardless of what actually happened to it on the
     exchange. Confirmed live this session: 42 of 43 real option orders
-    placed over 48h were neither filled nor still resting -- likely a
-    plain order's 10-minute signature_expiry_sec letting Derive drop an
-    unmatched GTC order, though that exact mechanism isn't confirmed, just
-    consistent with every data point found.
+    placed over 48h were neither filled nor still resting -- a plain
+    order's signature expiry ends a GTC order, confirmed 2026-10-18 (Derive
+    reports them 'expired'), and was only 10 minutes until
+    ENTRY_ORDER_LIFETIME_SEC.
 
     Three outcomes per row:
       - confirmed real fill (its testnet_order_id shows up in
@@ -762,6 +805,9 @@ def run_live_tick(conn):
         for sid, state in current_states.items()
     }
     low_buying_power = {sid: False for sid in subaccount_ids}
+    # Unfilled entries still on the book, counted toward the margin cap (see
+    # _margin_utilization_after); kept current as this tick places more.
+    resting_by_sub = {sid: _resting_entries(sid) for sid in subaccount_ids}
     listed_by_asset = {}  # testnet's option listings, fetched at most once per asset per tick (see snap_strike)
 
     # find_new_candidates() already fully materializes its result (and
@@ -895,7 +941,7 @@ def run_live_tick(conn):
                     continue
 
             try:
-                utilization = _margin_utilization_after(current_states[subaccount_id], traded, c["side"], amount, c["asset"])
+                utilization = _margin_utilization_after(current_states[subaccount_id], traded, c["side"], amount, c["asset"], resting_by_sub[subaccount_id])
             except Exception as e:
                 print(f"{traded} margin simulation failed, skipping: {e}")
                 skipped_untradeable += 1
@@ -916,6 +962,7 @@ def run_live_tick(conn):
                     amount=amount,
                     limit_price=mark_price,
                     subaccount_id=subaccount_id,
+                    signature_expiry_sec=_entry_signature_expiry(int(time.time()), c["expiry"]),
                 )
             except Exception as e:
                 print(f"order placement failed for {traded} on {config['name']}, skipping: {e}")
@@ -924,6 +971,8 @@ def run_live_tick(conn):
 
             order = order_result["order"]
             entry_price = float(order["limit_price"])
+            signed = float(amount) if c["side"] == "buy" else -float(amount)
+            resting_by_sub[subaccount_id][traded] = resting_by_sub[subaccount_id].get(traded, 0.0) + signed
 
             stop_order_id = None
             if c["side"] == "sell" and config.get("stop_loss", True):

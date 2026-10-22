@@ -32,6 +32,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from db.cloud_conn import get_live_conn  # noqa: E402
+from scripts import hl_paper  # noqa: E402
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
@@ -208,8 +209,16 @@ def run():
     n_new = add_tracked_wallets(conn, rows, today)
     n_upd, n_fills, n_hft = record_fills(conn, now_ms)
     n_tracking = conn.execute("SELECT COUNT(*) AS n FROM hl_tracked_wallets WHERE status = 'tracking'").fetchone()["n"]
+    # Daily paper run of the perp strategy (scripts/hl_paper.py) -- after
+    # the recorder's own commits, so a failure here can't cost them.
+    try:
+        n_paper = hl_paper.run_daily(conn)
+        conn.commit()
+    except Exception as e:
+        n_paper = 0
+        print(f"hl paper run failed this run: {type(e).__name__}")
     print(f"leaderboard: {len(rows)} accounts, {n_snap} stored | tracked wallets: +{n_new} added, {n_tracking} tracking, "
-          f"{n_hft} newly marked too active | fills: {n_fills} stored across {n_upd} wallet(s)")
+          f"{n_hft} newly marked too active | fills: {n_fills} stored across {n_upd} wallet(s) | paper strategy: {n_paper} day(s) recorded")
     conn.close()
 
 

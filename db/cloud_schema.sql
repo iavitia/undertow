@@ -305,6 +305,26 @@ CREATE TABLE IF NOT EXISTS hl_fills (
 );
 CREATE INDEX IF NOT EXISTS idx_hl_fills_time ON hl_fills (time);
 
+-- Daily Hyperliquid paper run of a perp strategy (scripts/hl_paper.py): one
+-- row per strategy per closed UTC day (day = the day's start, ms), with the
+-- positions held from that close and a paper equity index (1.0 at the
+-- first row) net of funding and fees. No orders are placed.
+CREATE TABLE IF NOT EXISTS hl_paper_strategy (
+    strategy TEXT NOT NULL,
+    day BIGINT NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    day_return DOUBLE PRECISION,
+    funding DOUBLE PRECISION,
+    in_trend INTEGER NOT NULL,
+    trend_pos DOUBLE PRECISION NOT NULL,
+    carry_pos DOUBLE PRECISION NOT NULL,
+    vol_30d DOUBLE PRECISION,
+    fee_pct DOUBLE PRECISION NOT NULL,
+    equity DOUBLE PRECISION NOT NULL,
+    recorded_at BIGINT NOT NULL,
+    PRIMARY KEY (strategy, day)
+);
+
 -- Row-level security on, with no policies: Supabase exposes every table in
 -- `public` through its REST API to the `anon`/`authenticated` roles, and
 -- without RLS those roles could read (and write) the watchlist and the
@@ -325,3 +345,4 @@ ALTER TABLE rule_paper_trades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hl_leaderboard_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hl_tracked_wallets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hl_fills ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hl_paper_strategy ENABLE ROW LEVEL SECURITY;

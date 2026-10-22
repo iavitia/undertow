@@ -185,6 +185,25 @@ def rule_paper_summary(conn):
     return out
 
 
+def hl_paper_summary(conn):
+    """The Hyperliquid perp strategy's paper equity (scripts/hl_paper.py)."""
+    rows = conn.execute("SELECT * FROM hl_paper_strategy ORDER BY strategy, day").fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["strategy"], []).append(r)
+    res = []
+    for name, rs in out.items():
+        peak, dd = rs[0]["equity"], 0.0
+        for r in rs:
+            peak = max(peak, r["equity"])
+            dd = min(dd, r["equity"] / peak - 1)
+        days = (rs[-1]["day"] - rs[0]["day"]) / 86_400_000
+        res.append({"name": name, "days": days, "ret": rs[-1]["equity"] / rs[0]["equity"] - 1, "maxdd": dd,
+                    "state": "trend (long perp)" if rs[-1]["in_trend"] else "carry", "trend_pos": rs[-1]["trend_pos"],
+                    "fees": sum(r["fee_pct"] for r in rs), "since": time.strftime("%Y-%m-%d", time.gmtime(rs[0]["day"] / 1000))})
+    return res
+
+
 def run(window_hours=WINDOW_HOURS):
     now_ms = int(time.time() * 1000)
     since_ms = now_ms - window_hours * 3600 * 1000
@@ -195,6 +214,7 @@ def run(window_hours=WINDOW_HOURS):
     wl_trades, wl_silent_h, market_wallets = watchlist_feed_health(conn, since_ms, now_ms)
     eth_pf = eth_portfolio_vs_mainnet(conn)
     rules = rule_paper_summary(conn)
+    hl = hl_paper_summary(conn)
     conn.close()
 
     print(f"=== Daily report -- trailing {window_hours}h ===\n")
@@ -241,6 +261,12 @@ def run(window_hours=WINDOW_HOURS):
         print(f"  settled: {r['resolved']}, {r['wins']} wins | P&L at {r['size']:g} BTC ${r['pnl']:+,.2f} (at 0.02 BTC ${r['pnl_002']:+,.2f})")
         print(f"  per trade on margin: {pct(r['per_trade_on_margin'])} (backtest expected {pct(BACKTEST_PER_TRADE_ON_MARGIN)})")
         print(f"  real spread given up at entry (1 - bid/mark): median {pct(r['median_spread'])} (backtest assumed {pct(BACKTEST_SPREAD)}) | bid deep enough for the full size: {pct(r['deep_share'])}")
+
+    for h in hl:
+        print(f"\n-- Hyperliquid paper strategy: {h['name']} (since {h['since']}, no orders) --")
+        print(f"  {h['days']:.0f} day(s): return {h['ret']:+.2%} | max drawdown {h['maxdd']:+.2%} | fees paid {h['fees']:.3%} | now in {h['state']}"
+              + (f" at {h['trend_pos']:.2f}x" if h['state'].startswith('trend') else ""))
+        print("  backtest reference (2023-06 -> 2026-10): ~+12.8%/yr, max drawdown -12%; choppy years ~+2-4%")
 
     print("\n-- Real exchange record (Derive's own data, ground truth) --")
     real = real_exchange_summary(since_ms, now_ms)

@@ -218,6 +218,40 @@ CREATE TABLE IF NOT EXISTS paper_trade_marks (
 );
 CREATE INDEX IF NOT EXISTS idx_paper_trade_marks_trade ON paper_trade_marks (paper_trade_id);
 
+-- Mainnet paper run for a rule-based strategy (scripts/rule_paper.py): one
+-- row per rule per UTC day, recording what the rule would have traded on
+-- MAINNET -- the real bid/ask/mark, depth, listed fee and required margin --
+-- and the settled result. No orders are placed. status 'skipped' rows keep
+-- the reason a day had no trade (e.g. no bid), so gaps are visible.
+CREATE TABLE IF NOT EXISTS rule_paper_trades (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    rule_name TEXT NOT NULL,
+    entry_date TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'resolved', 'skipped')),
+    skip_reason TEXT,
+    asset TEXT NOT NULL,
+    instrument TEXT,
+    option_type TEXT,
+    strike DOUBLE PRECISION,
+    expiry BIGINT,
+    size DOUBLE PRECISION,
+    entry_ts BIGINT NOT NULL,
+    spot_at_entry DOUBLE PRECISION,
+    atm_iv DOUBLE PRECISION,
+    target_strike DOUBLE PRECISION,
+    bid DOUBLE PRECISION,
+    ask DOUBLE PRECISION,
+    mark DOUBLE PRECISION,
+    bid_amount DOUBLE PRECISION,
+    entry_fee_usd DOUBLE PRECISION,
+    margin_usd DOUBLE PRECISION,
+    settle_spot DOUBLE PRECISION,
+    exit_value DOUBLE PRECISION,
+    resolved_ts BIGINT,
+    pnl_usd DOUBLE PRECISION,
+    UNIQUE (rule_name, entry_date)
+);
+
 -- Row-level security on, with no policies: Supabase exposes every table in
 -- `public` through its REST API to the `anon`/`authenticated` roles, and
 -- without RLS those roles could read (and write) the watchlist and the
@@ -234,3 +268,4 @@ ALTER TABLE wallet_qualification ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wallet_edge_profile ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paper_trades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paper_trade_marks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rule_paper_trades ENABLE ROW LEVEL SECURITY;

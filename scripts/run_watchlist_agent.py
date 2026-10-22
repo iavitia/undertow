@@ -34,6 +34,7 @@ from analysis.pnl import intrinsic_value, nearest_index_price
 from clients.derive_client import get_ticker
 from config import COPY_LATENCY_MS, COPY_STALENESS_WINDOW_MS, SETTLEMENT_FRESHNESS_TOLERANCE_MS
 from db.cloud_conn import INTEGRITY_ERRORS, get_live_conn
+from scripts import rule_paper
 from scripts.assign_wallet_aliases import assign_missing
 from scripts.live_poll import ingest
 from scripts.resolve_paper_trades import resolve
@@ -466,11 +467,21 @@ def run():
     )
     conn.commit()
 
+    # Mainnet paper run for rule-based strategies (scripts/rule_paper.py) --
+    # after the tick's own commit, so a failure here can't cost any of the
+    # work above; its uncommitted writes are dropped on close.
+    try:
+        n_rule_entered, n_rule_resolved = rule_paper.run_tick(conn)
+    except Exception as e:
+        n_rule_entered = n_rule_resolved = 0
+        print(f"rule paper run failed this tick: {type(e).__name__}")
+
     print(
         f"ingested {n_ingested} trade leg(s), opened {n_opened} new position(s), "
         f"advanced {n_advanced} pending entr(y/ies), resolved {n_resolved} trade(s), "
         f"recorded {n_marks_recorded} live mark(s), skipped {n_skipped_weak_edge} weak-edge, "
-        f"determined {n_wallet_outcomes} wallet-own outcome(s)"
+        f"determined {n_wallet_outcomes} wallet-own outcome(s), "
+        f"rule paper: {n_rule_entered} entered, {n_rule_resolved} settled"
     )
     conn.close()
 

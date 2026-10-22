@@ -148,6 +148,43 @@ def eth_portfolio_vs_mainnet(conn):
     ).fetchone()
 
 
+BACKTEST_SPREAD = 0.12              # what the rule backtest assumed a sale gives up vs mark
+BACKTEST_PER_TRADE_ON_MARGIN = 0.0044  # backtest at 0.05 BTC, 2024-06 -> 2026-06, full mainnet costs
+
+
+def rule_paper_summary(conn):
+    """Each rule's mainnet paper run (scripts/rule_paper.py, all time) vs
+    the backtest's assumptions. P&L is also recomputed at 0.02 BTC -- the
+    fee is mostly flat, so smaller sizes keep less of the premium."""
+    out = []
+    for name in [r["rule_name"] for r in conn.execute("SELECT DISTINCT rule_name FROM rule_paper_trades ORDER BY 1").fetchall()]:
+        rows = conn.execute("SELECT * FROM rule_paper_trades WHERE rule_name = ?", (name,)).fetchall()
+        entered = [r for r in rows if r["status"] != "skipped"]
+        done = [r for r in rows if r["status"] == "resolved"]
+        skips = {}
+        for r in rows:
+            if r["status"] == "skipped":
+                skips[r["skip_reason"]] = skips.get(r["skip_reason"], 0) + 1
+        spreads = [1 - r["bid"] / r["mark"] for r in entered if r["mark"]]
+        deep = [r for r in entered if r["bid_amount"] is not None and r["bid_amount"] >= r["size"]]
+
+        def pnl_at(r, size):
+            fee = 0.5 + min(0.0003 * size * r["spot_at_entry"], 0.125 * r["bid"] * size)
+            return (r["bid"] - r["exit_value"]) * size - fee
+
+        margins = [r["margin_usd"] for r in done if r["margin_usd"]]
+        out.append({
+            "name": name, "days": len(rows), "entered": len(entered), "open": len(entered) - len(done), "skips": skips,
+            "resolved": len(done), "wins": sum(r["pnl_usd"] > 0 for r in done),
+            "pnl": sum(r["pnl_usd"] for r in done), "pnl_002": sum(pnl_at(r, 0.02) for r in done),
+            "per_trade_on_margin": (sum(r["pnl_usd"] for r in done) / len(done)) / (sum(margins) / len(margins)) if margins and done else None,
+            "median_spread": sorted(spreads)[len(spreads) // 2] if spreads else None,
+            "deep_share": len(deep) / len(entered) if entered else None,
+            "size": entered[0]["size"] if entered else None,
+        })
+    return out
+
+
 def run(window_hours=WINDOW_HOURS):
     now_ms = int(time.time() * 1000)
     since_ms = now_ms - window_hours * 3600 * 1000
@@ -157,6 +194,7 @@ def run(window_hours=WINDOW_HOURS):
     last_activity_h = most_recent_activity(conn, now_ms)
     wl_trades, wl_silent_h, market_wallets = watchlist_feed_health(conn, since_ms, now_ms)
     eth_pf = eth_portfolio_vs_mainnet(conn)
+    rules = rule_paper_summary(conn)
     conn.close()
 
     print(f"=== Daily report -- trailing {window_hours}h ===\n")
@@ -195,6 +233,14 @@ def run(window_hours=WINDOW_HOURS):
         print(f"  mainnet estimate (net of fees): {eth_pf['sh_n']} resolved or stopped out, {eth_pf['sh_wins']} wins, avg return/trade {pct(eth_pf['sh_avg'])}")
         if eth_pf["both_n"]:
             print(f"  same {eth_pf['both_n']} trade(s) resolved on both: testnet beats the mainnet estimate by {pct(eth_pf['gap_avg'])} per trade on average")
+
+    for r in rules:
+        pct = lambda v: f"{v * 100:.1f}%" if v is not None else "n/a"
+        print(f"\n-- Rule paper run on mainnet: {r['name']} (all time, no orders) --")
+        print(f"  {r['days']} day(s): {r['entered']} entered ({r['open']} still open), skipped {r['skips'] or 'none'}")
+        print(f"  settled: {r['resolved']}, {r['wins']} wins | P&L at {r['size']:g} BTC ${r['pnl']:+,.2f} (at 0.02 BTC ${r['pnl_002']:+,.2f})")
+        print(f"  per trade on margin: {pct(r['per_trade_on_margin'])} (backtest expected {pct(BACKTEST_PER_TRADE_ON_MARGIN)})")
+        print(f"  real spread given up at entry (1 - bid/mark): median {pct(r['median_spread'])} (backtest assumed {pct(BACKTEST_SPREAD)}) | bid deep enough for the full size: {pct(r['deep_share'])}")
 
     print("\n-- Real exchange record (Derive's own data, ground truth) --")
     real = real_exchange_summary(since_ms, now_ms)

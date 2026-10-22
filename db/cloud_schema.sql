@@ -252,6 +252,59 @@ CREATE TABLE IF NOT EXISTS rule_paper_trades (
     UNIQUE (rule_name, entry_date)
 );
 
+-- Hyperliquid recorder (scripts/hl_recorder.py), one run a day. The public
+-- API only returns a leaderboard of TODAY's survivors and each address's
+-- most recent 10k fills, so wallets can't be judged point-in-time from
+-- the API alone. These tables build that history going forward:
+--   hl_leaderboard_snapshots: daily snapshot of sizable, active accounts.
+--   hl_tracked_wallets: wallets whose fills are recorded, sampled at
+--     random by size/activity (never by P&L, so losers are tracked too).
+--     'too_active' = high-frequency (more than ~3k fills in 30 days); kept
+--     in the snapshots, but its fills aren't stored.
+--   hl_fills: those wallets' fills, one row per (address, trade id).
+CREATE TABLE IF NOT EXISTS hl_leaderboard_snapshots (
+    snapshot_date TEXT NOT NULL,
+    address TEXT NOT NULL,
+    account_value DOUBLE PRECISION,
+    pnl_day DOUBLE PRECISION,
+    pnl_week DOUBLE PRECISION,
+    pnl_month DOUBLE PRECISION,
+    pnl_all DOUBLE PRECISION,
+    roi_month DOUBLE PRECISION,
+    roi_all DOUBLE PRECISION,
+    vlm_day DOUBLE PRECISION,
+    vlm_month DOUBLE PRECISION,
+    vlm_all DOUBLE PRECISION,
+    PRIMARY KEY (snapshot_date, address)
+);
+
+CREATE TABLE IF NOT EXISTS hl_tracked_wallets (
+    address TEXT PRIMARY KEY,
+    added_date TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('tracking', 'too_active')),
+    last_fill_ts BIGINT,
+    fills_stored INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS hl_fills (
+    address TEXT NOT NULL,
+    tid BIGINT NOT NULL,
+    coin TEXT NOT NULL,
+    side TEXT NOT NULL,
+    px DOUBLE PRECISION NOT NULL,
+    sz DOUBLE PRECISION NOT NULL,
+    time BIGINT NOT NULL,
+    dir TEXT,
+    start_position DOUBLE PRECISION,
+    closed_pnl DOUBLE PRECISION,
+    fee DOUBLE PRECISION,
+    fee_token TEXT,
+    crossed BOOLEAN,
+    oid BIGINT,
+    PRIMARY KEY (address, tid)
+);
+CREATE INDEX IF NOT EXISTS idx_hl_fills_time ON hl_fills (time);
+
 -- Row-level security on, with no policies: Supabase exposes every table in
 -- `public` through its REST API to the `anon`/`authenticated` roles, and
 -- without RLS those roles could read (and write) the watchlist and the
@@ -269,3 +322,6 @@ ALTER TABLE wallet_edge_profile ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paper_trades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paper_trade_marks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rule_paper_trades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hl_leaderboard_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hl_tracked_wallets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hl_fills ENABLE ROW LEVEL SECURITY;

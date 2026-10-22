@@ -1,0 +1,36 @@
+name: Hyperliquid recorder (daily)
+
+# Runs scripts/hl_recorder.py once a day: a leaderboard snapshot plus fills
+# for a randomly sampled set of tracked wallets, building the point-in-time
+# history the public API can't provide (see that script's docstring).
+# Read-only against Hyperliquid's public API; writes only to the cloud DB.
+#
+# Dispatched daily by Supabase pg_cron (job 'trigger-hl-recorder'), the same
+# way as the agent workflows, not by GitHub's own schedule trigger (see
+# watchlist-agent.yml for why). Its own concurrency group, so it never
+# delays the 5-minute agent ticks.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: hl-recorder
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/hl_recorder.py
+        env:
+          CLOUD_DATABASE_URL: ${{ secrets.CLOUD_DATABASE_URL }}

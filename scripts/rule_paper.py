@@ -16,20 +16,26 @@ that expiry), and hold to expiry. A point-in-time backtest net of mainnet
 costs was positive on 2024-06 -> 2026-06 BTC, which is what this run checks
 against reality.
 
-Called every watchlist-agent tick (scripts/run_watchlist_agent.py). Entry
-is idempotent: one row per rule per UTC day (UNIQUE rule_name, entry_date),
-written on the first tick inside the entry hour, so a late or repeated tick
-can't double-enter. Prints counts only -- the repo and its Actions logs are
-public.
+Runs on its own (.github/workflows/rule-paper.yml, dispatched by Supabase
+pg_cron at 04:05, 04:35, 08:05 and 08:35 UTC), independent of the Derive
+copy-trading agents, which were paused 2026-11-01. Entry is idempotent: one
+row per rule per UTC day (UNIQUE rule_name, entry_date), written on the
+first run inside the entry hour, so a late or repeated run can't
+double-enter. Settlement uses Derive's own settlement price for the expired
+instrument, so nothing depends on the watchlist feed. Prints counts only --
+the repo and its Actions logs are public. See docs/btc-put-strategy.md.
 """
 import math
+import sys
 import time
+from pathlib import Path
 
 import requests
 
-from analysis.pnl import nearest_index_price
-from clients.derive_client import get_ticker
-from config import DERIVE_BASE_URL, SETTLEMENT_FRESHNESS_TOLERANCE_MS
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from clients.derive_client import get_ticker  # noqa: E402
+from config import DERIVE_BASE_URL  # noqa: E402
 
 RULES = [
     {
@@ -147,22 +153,32 @@ def enter_if_due(conn, rule, now_ms=None):
     return 1
 
 
+def settlement_price(instrument_name):
+    """Derive's official settlement price for an expired option, or None
+    until it's published."""
+    details = _public("get_instrument", {"instrument_name": instrument_name}).get("option_details") or {}
+    v = details.get("settlement_price")
+    return float(v) if v not in (None, "") else None
+
+
 def resolve(conn, now_ms=None):
-    """Settles open rows whose option has expired, at the index price
-    nearest expiry -- the same estimate (and freshness rule) every other
-    settlement here uses. Settlement has no fee. Returns rows resolved."""
+    """Settles open rows whose option has expired, at Derive's official
+    settlement price. Settlement has no fee. Returns rows resolved."""
     now_ms = now_ms or int(time.time() * 1000)
     resolved = 0
     for r in conn.execute("SELECT * FROM rule_paper_trades WHERE status = 'open' AND expiry * 1000 <= ?", (now_ms,)).fetchall():
-        expiry_ms = r["expiry"] * 1000
-        spot, gap = nearest_index_price(conn, r["asset"], expiry_ms)
-        if spot is None or gap > SETTLEMENT_FRESHNESS_TOLERANCE_MS:
-            continue  # retry next tick
+        try:
+            spot = settlement_price(r["instrument"])
+        except Exception as e:
+            print(f"settlement lookup failed this run, retried next run: {type(e).__name__}")
+            continue
+        if spot is None:
+            continue  # not published yet; retry next run
         exit_value = max(0.0, r["strike"] - spot)
         pnl = (r["bid"] - exit_value) * r["size"] - r["entry_fee_usd"]
         conn.execute(
             "UPDATE rule_paper_trades SET status = 'resolved', settle_spot = ?, exit_value = ?, resolved_ts = ?, pnl_usd = ? WHERE id = ?",
-            (spot, exit_value, expiry_ms, pnl, r["id"]),
+            (spot, exit_value, r["expiry"] * 1000, pnl, r["id"]),
         )
         resolved += 1
     return resolved
@@ -180,3 +196,12 @@ def run_tick(conn):
     resolved = resolve(conn)
     conn.commit()
     return entered, resolved
+
+
+if __name__ == "__main__":
+    from db.cloud_conn import get_live_conn
+
+    conn = get_live_conn()
+    n_entered, n_resolved = run_tick(conn)
+    conn.close()
+    print(f"rule paper: {n_entered} entered, {n_resolved} settled")

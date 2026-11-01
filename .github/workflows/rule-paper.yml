@@ -1,0 +1,38 @@
+name: Rule paper run (mainnet, no orders)
+
+# Runs scripts/rule_paper.py: records what each rule-based strategy would
+# trade on Derive mainnet at real prices, and settles expired entries at
+# Derive's official settlement price. Read-only against Derive's public
+# API; writes only to the cloud DB. See docs/btc-put-strategy.md.
+#
+# Dispatched by Supabase pg_cron (job 'trigger-rule-paper') at 04:05,
+# 04:35, 08:05 and 08:35 UTC. Entry only happens inside the 04:00 UTC hour
+# and is idempotent, so the second run is a backstop for a late dispatch;
+# the 08:xx runs settle options that expired at 08:00. This used to run
+# inside every watchlist-agent tick, until the Derive copy-trading agents
+# were paused on 2026-11-01.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: rule-paper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/rule_paper.py
+        env:
+          CLOUD_DATABASE_URL: ${{ secrets.CLOUD_DATABASE_URL }}

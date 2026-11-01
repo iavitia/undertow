@@ -93,6 +93,17 @@ def most_recent_activity(conn, now_ms):
 WATCHLIST_SILENCE_ALERT_HOURS = 48
 
 
+def watchlist_agent_paused(conn):
+    """True when the pg_cron job that dispatches the watchlist agent is
+    inactive (paused 2026-11-01), so a silent feed is expected rather than
+    an incident."""
+    try:
+        r = conn.execute("SELECT active FROM cron.job WHERE jobname = 'trigger-watchlist-agent'").fetchone()
+    except Exception:
+        return False
+    return r is not None and not r["active"]
+
+
 def watchlist_feed_health(conn, since_ms, now_ms):
     """(trades ingested from active watchlist wallets in the window, hours
     since the last one, distinct wallets of any kind trading in the
@@ -212,6 +223,7 @@ def run(window_hours=WINDOW_HOURS):
     by_mode_opened, by_mode_resolved = paper_trading_summary(conn, since_ms, now_ms)
     last_activity_h = most_recent_activity(conn, now_ms)
     wl_trades, wl_silent_h, market_wallets = watchlist_feed_health(conn, since_ms, now_ms)
+    wl_paused = watchlist_agent_paused(conn)
     eth_pf = eth_portfolio_vs_mainnet(conn)
     rules = rule_paper_summary(conn)
     hl = hl_paper_summary(conn)
@@ -224,9 +236,11 @@ def run(window_hours=WINDOW_HOURS):
         print(f"NOTE: nothing in this {window_hours}h window, but the most recent activity of ANY kind was {last_activity_h:.1f}h ago -- the pipeline has been idle longer than this window, not just quiet today.\n")
 
     print("-- Watchlist feed --")
+    if wl_paused:
+        print("  PAUSED: the Derive copy-trading agents are off (pg_cron jobs inactive); no new trades are ingested")
     silent_str = f"{wl_silent_h:.1f}h ago" if wl_silent_h is not None else "never"
     print(f"  {wl_trades} trade(s) from active watchlist wallets in window (last one {silent_str}); {market_wallets} distinct wallets traded market-wide")
-    if wl_silent_h is None or wl_silent_h > WATCHLIST_SILENCE_ALERT_HOURS:
+    if not wl_paused and (wl_silent_h is None or wl_silent_h > WATCHLIST_SILENCE_ALERT_HOURS):
         print(f"  WARNING: no watchlist trade in over {WATCHLIST_SILENCE_ALERT_HOURS}h while the market kept trading -- check that Derive's `wallet` field still matches watchlist addresses before assuming the wallets went quiet")
     print()
 

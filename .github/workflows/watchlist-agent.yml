@@ -19,6 +19,11 @@ name: Watchlist agent (ingest + paper trading)
 # leaves room, while faster would start queueing runs behind each other)
 # -- `workflow_dispatch`-triggered runs aren't subject to the same
 # scheduling delay, confirmed firing within seconds of the cron tick.
+#
+# PAUSED 2026-11-01: the pg_cron job that dispatches this workflow is set
+# inactive (cron.alter_job((SELECT jobid FROM cron.job WHERE jobname = 'trigger-watchlist-agent'), active := false)); Derive's minimum
+# sizes and fees made copy-trading unworkable at our capital. Re-enable
+# with cron.alter_job((SELECT jobid FROM cron.job WHERE jobname = 'trigger-watchlist-agent'), active := true).
 
 on:
   workflow_dispatch: {}
